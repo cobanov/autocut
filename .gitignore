@@ -12,9 +12,6 @@ dist/
 .svelte-kit/
 build/
 
-# pnpm regenerates this stub on `pnpm install` when esbuild needs approve-builds
-pnpm-workspace.yaml
-
 # Vite
 .vite/
 

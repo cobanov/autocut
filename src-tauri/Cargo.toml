@@ -1,6 +1,6 @@
 [package]
 name = "autocut"
-version = "0.4.1"
+version = "0.4.2"
 description = "Drop a video, remove silences, export MP4 or FCPXML"
 authors = ["Mert Cobanov"]
 edition = "2021"

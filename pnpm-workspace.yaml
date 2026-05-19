@@ -1,0 +1,9 @@
+# pnpm 11+ no longer reads the `pnpm` field from package.json; settings live
+# here instead. esbuild + @tauri-apps/cli ship install-time scripts that need
+# to run (native binary extraction); approve them via onlyBuiltDependencies.
+# strictDepBuilds=false demotes "unapproved dep build" from error to warning
+# so a future dep that adds a build script won't break `pnpm install`.
+onlyBuiltDependencies:
+  - esbuild
+  - "@tauri-apps/cli"
+strictDepBuilds: false

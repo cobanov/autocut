@@ -187,10 +187,11 @@ fn fetch_btbn(
             .arg("-C")
             .arg(&extract))?;
     } else {
-        run(Command::new("unzip")
-            .args(["-o", "-q"])
+        // bsdtar (bundled with Windows 10+) handles zip via -xf; avoids needing `unzip` on PATH.
+        run(Command::new("tar")
+            .arg("-xf")
             .arg(&archive)
-            .arg("-d")
+            .arg("-C")
             .arg(&extract))?;
     }
 

@@ -4,6 +4,7 @@
   let keeps = $derived(editor.keepIntervals());
   let duration = $derived(editor.video?.duration ?? 0);
   let disabledCount = $derived(keeps.filter((k) => k.disabled).length);
+  const MIN_KEEP_SECONDS = 0.05;
 
   // Width-based responsive collapse driven by ResizeObserver. Container
   // queries should do this for free, but Chromium webviews evaluate them
@@ -45,12 +46,18 @@
   function commitStart(i: number, value: number) {
     if (!Number.isFinite(value)) return;
     const k = keeps[i];
-    editor.updateKeep(i, value, k.end);
+    if (!k) return;
+    const maxStart = Math.max(0, k.end - MIN_KEEP_SECONDS);
+    const next = Math.max(0, Math.min(maxStart, value));
+    editor.updateKeep(i, next, k.end);
   }
   function commitEnd(i: number, value: number) {
     if (!Number.isFinite(value)) return;
     const k = keeps[i];
-    editor.updateKeep(i, k.start, value);
+    if (!k) return;
+    const minEnd = Math.min(duration, k.start + MIN_KEEP_SECONDS);
+    const next = Math.min(duration, Math.max(minEnd, value));
+    editor.updateKeep(i, k.start, next);
   }
   function addAtPlayhead() {
     const t = editor.currentTime;

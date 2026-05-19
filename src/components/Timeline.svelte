@@ -179,7 +179,7 @@
 
   function onNavTrackPointer(e: PointerEvent) {
     if (!duration || !navEl) return;
-    if (e.target !== navEl) return;
+    e.preventDefault();
     const rect = navEl.getBoundingClientRect();
     const t = ((e.clientX - rect.left) / rect.width) * duration;
     const halfSpan = viewSpan / 2;
@@ -861,6 +861,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
+    pointer-events: none;
   }
   .nav-seg.keep { background: hsl(142 71% 55% / 0.25); }
   .nav-seg.keep.disabled { background: hsl(280 70% 68% / 0.3); }

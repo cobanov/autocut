@@ -37,7 +37,8 @@
   function startDrag(e: PointerEvent) {
     if (!containerEl) return;
     e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
     dragging = true;
     const rect = containerEl.getBoundingClientRect();
 
@@ -47,10 +48,14 @@
         direction === "horizontal" ? ev.clientX - rect.left : ev.clientY - rect.top;
       ratio = Math.max(min, Math.min(max, offset / total));
     };
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       dragging = false;
+      if (handle.hasPointerCapture(ev.pointerId)) {
+        handle.releasePointerCapture(ev.pointerId);
+      }
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       if (storageKey) {
         try {
           localStorage.setItem(storageKey, String(ratio));
@@ -61,6 +66,7 @@
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 </script>
 

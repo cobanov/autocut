@@ -36,6 +36,10 @@ export async function detectSilence(
   });
 }
 
+export async function cancelDetect(): Promise<void> {
+  await invoke("cancel_detect");
+}
+
 export async function exportMp4(
   source: string,
   output: string,
@@ -55,6 +59,10 @@ export async function exportMp4(
 
 export async function cancelExport(): Promise<void> {
   await invoke("cancel_export");
+}
+
+export async function cancelWaveform(): Promise<void> {
+  await invoke("cancel_waveform");
 }
 
 export async function revealInFinder(path: string): Promise<void> {

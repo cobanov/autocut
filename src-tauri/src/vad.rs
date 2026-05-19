@@ -9,7 +9,9 @@
 //! Padding (`speech_pad_ms`) is intentionally NOT applied here. CutList does
 //! it during inversion, which means changing pad doesn't need a VAD rerun.
 
-use anyhow::{Context, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use anyhow::{anyhow, Context, Result};
 use voice_activity_detector::VoiceActivityDetector;
 
 use crate::audio::VAD_SAMPLE_RATE;
@@ -46,10 +48,15 @@ impl Default for VadParams {
 /// and produce false silences. `time_offset` is added to every returned
 /// timestamp to keep results source-relative when called with a windowed
 /// audio slice.
-pub fn detect(
+pub fn detect(samples: &[f32], params: VadParams, time_offset: f64) -> Result<Vec<SpeechSegment>> {
+    detect_with_cancel(samples, params, time_offset, None)
+}
+
+pub fn detect_with_cancel(
     samples: &[f32],
     params: VadParams,
     time_offset: f64,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Vec<SpeechSegment>> {
     let mut vad = VoiceActivityDetector::builder()
         .sample_rate(VAD_SAMPLE_RATE as i64)
@@ -60,7 +67,10 @@ pub fn detect(
     let neg_threshold = (params.threshold - 0.15).max(0.05);
     let mut in_speech = false;
     let mut chunk_is_speech: Vec<bool> = Vec::with_capacity(samples.len() / CHUNK_SIZE + 1);
-    for chunk in samples.chunks(CHUNK_SIZE) {
+    for (i, chunk) in samples.chunks(CHUNK_SIZE).enumerate() {
+        if i % 64 == 0 && is_cancelled(cancel) {
+            return Err(anyhow!("detection cancelled"));
+        }
         let prob = vad.predict(chunk.iter().copied());
         if !in_speech && prob >= params.threshold {
             in_speech = true;
@@ -81,6 +91,12 @@ pub fn detect(
             end: time_offset + e as f64 * CHUNK_SECONDS,
         })
         .collect())
+}
+
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel
+        .map(|flag| flag.load(Ordering::SeqCst))
+        .unwrap_or(false)
 }
 
 fn ms_to_chunks(ms: u32) -> usize {

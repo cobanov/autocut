@@ -24,6 +24,8 @@ pub fn run() {
             commands::detect_silence,
             commands::export_mp4,
             commands::cancel_export,
+            commands::cancel_detect,
+            commands::cancel_waveform,
             commands::export_fcpxml,
             commands::diagnostic_info,
             commands::reveal_in_finder,

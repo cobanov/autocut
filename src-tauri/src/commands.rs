@@ -12,14 +12,14 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::audio::extract_pcm;
+use crate::audio::extract_pcm_with_cancel;
 use crate::binaries::{ffmpeg_path, ffprobe_path};
 use crate::cutlist::CutList;
 use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams};
 use crate::export_mp4;
 use crate::probe::{probe, VideoInfo};
-use crate::vad::{detect as detect_vad, VadParams};
-use crate::waveform::extract_waveform;
+use crate::vad::{detect_with_cancel as detect_vad_with_cancel, VadParams};
+use crate::waveform::extract_waveform_with_cancel;
 
 /// Render an anyhow::Error including the full chain of `with_context`
 /// messages. Plain `.to_string()` would only show the outermost message,
@@ -34,6 +34,34 @@ pub struct AppState {
     /// Single-job cancellation flag. Set by `cancel_export`, polled by the
     /// export worker. We only support one concurrent export.
     pub export_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub detect_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+fn install_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) -> Arc<AtomicBool> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut guard = slot.lock().unwrap();
+    if let Some(previous) = guard.replace(cancel.clone()) {
+        previous.store(true, Ordering::SeqCst);
+    }
+    cancel
+}
+
+fn clear_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>, cancel: &Arc<AtomicBool>) {
+    let mut guard = slot.lock().unwrap();
+    if guard
+        .as_ref()
+        .map(|current| Arc::ptr_eq(current, cancel))
+        .unwrap_or(false)
+    {
+        *guard = None;
+    }
+}
+
+fn cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) {
+    if let Some(flag) = slot.lock().unwrap().take() {
+        flag.store(true, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,15 +95,21 @@ fn resource_dir(app: &AppHandle) -> Option<PathBuf> {
 #[tauri::command]
 pub async fn compute_waveform(
     app: AppHandle,
+    state: State<'_, AppState>,
     path: String,
     target_bins: usize,
 ) -> Result<Vec<f32>, String> {
     let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
     let video = PathBuf::from(&path);
-    tauri::async_runtime::spawn_blocking(move || extract_waveform(&ffmpeg, &video, target_bins))
-        .await
-        .map_err(fmt_err)?
-        .map_err(fmt_err)
+    let cancel = install_cancel_slot(&state.waveform_cancel);
+    let cancel_for_worker = cancel.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        extract_waveform_with_cancel(&ffmpeg, &video, target_bins, Some(cancel_for_worker))
+    })
+    .await;
+    clear_cancel_slot(&state.waveform_cancel, &cancel);
+    let result = joined.map_err(fmt_err)?;
+    result.map_err(fmt_err)
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +154,7 @@ pub async fn open_video(app: AppHandle, path: String) -> Result<VideoInfo, Strin
 #[tauri::command]
 pub async fn detect_silence(
     app: AppHandle,
+    state: State<'_, AppState>,
     path: String,
     duration: f64,
     params: DetectParams,
@@ -130,15 +165,27 @@ pub async fn detect_silence(
     let pad = params.pad;
     let vad_params: VadParams = (&params).into();
     let offset = range.map(|(s, _)| s).unwrap_or(0.0);
+    let cancel = install_cancel_slot(&state.detect_cancel);
+    let cancel_for_worker = cancel.clone();
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<DetectResult, String> {
-        let samples = extract_pcm(&ffmpeg, &video, range).map_err(fmt_err)?;
-        let segments = detect_vad(&samples, vad_params, offset).map_err(fmt_err)?;
+    let joined = tauri::async_runtime::spawn_blocking(move || -> Result<DetectResult, String> {
+        let samples =
+            extract_pcm_with_cancel(&ffmpeg, &video, range, Some(cancel_for_worker.clone()))
+                .map_err(fmt_err)?;
+        let segments = detect_vad_with_cancel(
+            &samples,
+            vad_params,
+            offset,
+            Some(cancel_for_worker.as_ref()),
+        )
+        .map_err(fmt_err)?;
         let cutlist = CutList::from_speech_segments(&segments, duration, pad);
         Ok(DetectResult { cutlist })
     })
-    .await
-    .map_err(fmt_err)?
+    .await;
+    clear_cancel_slot(&state.detect_cancel, &cancel);
+    let result = joined.map_err(fmt_err)?;
+    result
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,8 +219,12 @@ pub struct ExportMp4Args {
     pub resolution: ExportResolution,
 }
 
-fn default_quality() -> ExportQuality { ExportQuality::Medium }
-fn default_resolution() -> ExportResolution { ExportResolution::Source }
+fn default_quality() -> ExportQuality {
+    ExportQuality::Medium
+}
+fn default_resolution() -> ExportResolution {
+    ExportResolution::Source
+}
 
 impl From<ExportQuality> for export_mp4::Quality {
     fn from(q: ExportQuality) -> Self {
@@ -212,11 +263,7 @@ pub async fn export_mp4(
     let source = PathBuf::from(&args.source);
     let output = PathBuf::from(&args.output);
 
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut guard = state.export_cancel.lock().unwrap();
-        *guard = Some(cancel.clone());
-    }
+    let cancel = install_cancel_slot(&state.export_cancel);
 
     let app_for_progress = app.clone();
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -229,7 +276,10 @@ pub async fn export_mp4(
         let on_progress = move |p: export_mp4::ExportProgress| {
             let _ = app_for_progress.emit(
                 "export-progress",
-                ExportProgressEvent { pct: p.pct, message: p.message },
+                ExportProgressEvent {
+                    pct: p.pct,
+                    message: p.message,
+                },
             );
         };
         let res = export_mp4::export(
@@ -244,22 +294,30 @@ pub async fn export_mp4(
         let _ = tx.send(res.map_err(fmt_err));
     });
 
-    let result = tauri::async_runtime::spawn_blocking(move || rx.recv().unwrap_or_else(|e| Err(e.to_string())))
-        .await
-        .map_err(fmt_err)?;
-
-    {
-        let mut guard = state.export_cancel.lock().unwrap();
-        *guard = None;
-    }
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv().unwrap_or_else(|e| Err(e.to_string()))
+    })
+    .await;
+    clear_cancel_slot(&state.export_cancel, &cancel);
+    let result = joined.map_err(fmt_err)?;
     result
 }
 
 #[tauri::command]
 pub fn cancel_export(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(flag) = state.export_cancel.lock().unwrap().clone() {
-        flag.store(true, Ordering::SeqCst);
-    }
+    cancel_slot(&state.export_cancel);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_detect(state: State<'_, AppState>) -> Result<(), String> {
+    cancel_slot(&state.detect_cancel);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_waveform(state: State<'_, AppState>) -> Result<(), String> {
+    cancel_slot(&state.waveform_cancel);
     Ok(())
 }
 

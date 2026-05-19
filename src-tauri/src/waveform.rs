@@ -6,17 +6,28 @@
 //! Result is a Vec<f32> in [0, 1] with `target_bins` entries.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
-use crate::audio::extract_pcm;
+use crate::audio::{extract_pcm, extract_pcm_with_cancel};
 
-pub fn extract_waveform(
+pub fn extract_waveform(ffmpeg: &Path, video: &Path, target_bins: usize) -> Result<Vec<f32>> {
+    extract_waveform_with_cancel(ffmpeg, video, target_bins, None)
+}
+
+pub fn extract_waveform_with_cancel(
     ffmpeg: &Path,
     video: &Path,
     target_bins: usize,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<Vec<f32>> {
-    let samples = extract_pcm(ffmpeg, video, None)?;
+    let samples = if let Some(flag) = cancel.clone() {
+        extract_pcm_with_cancel(ffmpeg, video, None, Some(flag))?
+    } else {
+        extract_pcm(ffmpeg, video, None)?
+    };
     if samples.is_empty() || target_bins == 0 {
         return Ok(Vec::new());
     }
@@ -24,6 +35,9 @@ pub fn extract_waveform(
     let bin_size = (samples.len() as f64 / bins as f64).max(1.0);
     let mut out = Vec::with_capacity(bins);
     for i in 0..bins {
+        if i % 512 == 0 && is_cancelled(cancel.as_deref()) {
+            return Err(anyhow!("waveform extraction cancelled"));
+        }
         let start = (i as f64 * bin_size) as usize;
         let end = (((i + 1) as f64 * bin_size) as usize).min(samples.len());
         if end <= start {
@@ -37,4 +51,10 @@ pub fn extract_waveform(
         out.push(peak);
     }
     Ok(out)
+}
+
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel
+        .map(|flag| flag.load(Ordering::SeqCst))
+        .unwrap_or(false)
 }

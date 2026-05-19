@@ -4,7 +4,9 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import {
+  cancelDetect as apiCancelDetect,
   cancelExport as apiCancelExport,
+  cancelWaveform as apiCancelWaveform,
   computeWaveform,
   detectSilence,
   exportFcpxml as apiExportFcpxml,
@@ -49,6 +51,10 @@ const DEFAULTS: DetectParams = {
   pad: 0.3,
   preview_range: null,
 };
+
+function isCancellationError(err: unknown): boolean {
+  return /cancell?ed/i.test(String(err));
+}
 
 class EditorStore {
   video = $state<VideoInfo | null>(null);
@@ -107,7 +113,23 @@ class EditorStore {
     return this.sessionId === sessionId && this.video?.path === path;
   }
 
+  private cancelAnalysisJobs() {
+    void apiCancelDetect().catch(() => {
+      /* best-effort: stale detect jobs should not surface cancel errors */
+    });
+    void apiCancelWaveform().catch(() => {
+      /* best-effort: waveform is non-fatal and may not be running */
+    });
+  }
+
   async loadVideo(path: string) {
+    const wasExporting = this.jobStatus === "exporting";
+    this.cancelAnalysisJobs();
+    if (wasExporting) {
+      void apiCancelExport().catch(() => {
+        /* best-effort: loading a new source abandons the old export */
+      });
+    }
     const sessionId = ++this.sessionId;
     this.loadError = null;
     this.detectError = null;
@@ -117,6 +139,8 @@ class EditorStore {
     this.cutlist = null;
     this.waveform = null;
     this.lastExport = null;
+    this.exportProgress = null;
+    this.jobStatus = "idle";
     // Surface the path immediately so the <video> tag starts streaming bytes
     // while ffprobe is running. ffprobe is usually fast but on multi-GB
     // sources it can take a second or two, and we don't want the UI to look
@@ -161,7 +185,9 @@ class EditorStore {
       }
     } catch (err) {
       if (this.isCurrentVideo(sessionId, path)) {
-        this.waveformError = String(err);
+        if (!isCancellationError(err)) {
+          this.waveformError = String(err);
+        }
       }
     }
   }
@@ -229,6 +255,11 @@ class EditorStore {
   scheduleDetect(delayMs = 300) {
     if (!this.cutlist) return;
     if (this.detectTimer) clearTimeout(this.detectTimer);
+    if (this.jobStatus === "detecting") {
+      void apiCancelDetect().catch(() => {
+        /* best-effort: the next debounce tick will run with latest params */
+      });
+    }
     this.detectTimer = setTimeout(() => this.runDetectNow(), delayMs);
   }
 
@@ -240,6 +271,9 @@ class EditorStore {
     if (!this.video || this.jobStatus === "exporting") return false;
     if (this.jobStatus === "detecting") {
       this.detectQueued = true;
+      void apiCancelDetect().catch(() => {
+        /* best-effort: queued detect will run after the current one exits */
+      });
       return false;
     }
     const sessionId = this.sessionId;
@@ -259,7 +293,9 @@ class EditorStore {
       return true;
     } catch (err) {
       if (this.isCurrentVideo(sessionId, path)) {
-        this.detectError = String(err);
+        if (!isCancellationError(err)) {
+          this.detectError = String(err);
+        }
       }
       return false;
     } finally {
@@ -348,6 +384,7 @@ class EditorStore {
 
   closeVideo() {
     const wasExporting = this.jobStatus === "exporting";
+    this.cancelAnalysisJobs();
     this.sessionId += 1;
     this.video = null;
     this.pendingPath = null;

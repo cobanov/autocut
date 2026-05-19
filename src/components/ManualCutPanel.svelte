@@ -24,17 +24,18 @@
     return () => ro.disconnect();
   });
 
-  // Whenever the timeline hover index moves to a row that's not currently
-  // visible in this panel, scroll the matching row into view. `block:
-  // "nearest"` makes this a no-op when the row is already fully on-screen,
-  // so hovering rows inside the panel doesn't cause jitter.
+  // Scroll the matching row into view only when the user explicitly clicks a
+  // segment in the timeline. Earlier this auto-scrolled on hover, but during
+  // a timeline scrub the cursor "hovers" dozens of segments per second, which
+  // stacked smooth-scroll animations and pinned the UI thread on Windows.
+  // `block: "nearest"` makes it a no-op when the row is already on screen.
   $effect(() => {
-    const idx = editor.hoveredKeepIndex;
+    const idx = editor.focusedKeepIndex;
     if (idx === null || !listEl) return;
     const row = listEl.querySelector(
       `[data-keep-index="${idx}"]`,
     ) as HTMLElement | null;
-    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    row?.scrollIntoView({ block: "nearest", behavior: "instant" });
   });
 
   function fmt(s: number): string {

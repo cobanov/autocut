@@ -258,6 +258,31 @@
 
   // ---- waveform path (visible slice) ----
 
+  // Cap SVG path complexity. The bar/nav are at most a couple thousand pixels
+  // wide on any reasonable display, so anything past ~2k points renders the
+  // same pixels but costs Chromium/WebView2 a real amount of string parsing per
+  // repaint. On Windows this was the main reason scrolling a long video's
+  // timeline froze the rest of the UI (video, panels) — every viewStart/viewEnd
+  // tick rebuilt a 50k-point path. macOS/WKWebView absorbed it; WebView2 does
+  // not. Downsampling here is a no-op visually.
+  const MAX_RENDER_POINTS = 2000;
+
+  function downsamplePeaks(peaks: number[], target: number): number[] {
+    if (peaks.length <= target) return peaks;
+    const out = new Array<number>(target);
+    const ratio = peaks.length / target;
+    for (let i = 0; i < target; i++) {
+      const s = Math.floor(i * ratio);
+      const e = Math.max(s + 1, Math.floor((i + 1) * ratio));
+      let peak = 0;
+      for (let j = s; j < e && j < peaks.length; j++) {
+        if (peaks[j] > peak) peak = peaks[j];
+      }
+      out[i] = peak;
+    }
+    return out;
+  }
+
   function buildWavePath(peaks: number[]): string {
     if (peaks.length < 2) return "";
     // Compress softer parts so the timeline never looks flat. sqrt scaling
@@ -290,12 +315,14 @@
       start + 1,
       Math.min(total, Math.ceil((viewEnd / duration) * total)),
     );
-    return buildWavePath(editor.waveform.slice(start, end));
+    return buildWavePath(
+      downsamplePeaks(editor.waveform.slice(start, end), MAX_RENDER_POINTS),
+    );
   });
 
   let navWavePath = $derived.by(() => {
     if (!editor.waveform || !editor.waveform.length) return "";
-    return buildWavePath(editor.waveform);
+    return buildWavePath(downsamplePeaks(editor.waveform, MAX_RENDER_POINTS));
   });
 </script>
 
@@ -401,6 +428,7 @@
             title="{isDisabled ? 'disabled' : c.kind} {fmt(c.start)} → {fmt(c.end)}"
             onmouseenter={isKeep ? () => editor.setHoveredKeep(s.keepIndex) : undefined}
             onmouseleave={isKeep ? () => editor.setHoveredKeep(null) : undefined}
+            onclick={isKeep ? () => editor.focusKeep(s.keepIndex) : undefined}
             role="presentation"
           >
             {#if isKeep}

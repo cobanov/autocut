@@ -53,6 +53,13 @@ class EditorStore {
   /// Index of the keep interval currently hovered (in either Timeline or
   /// ManualCutPanel). Used to sync the highlight between the two views.
   hoveredKeepIndex = $state<number | null>(null);
+  /// Index of the keep interval the user explicitly focused by clicking it
+  /// in the timeline. ManualCutPanel scrolls the matching row into view in
+  /// response to this; hover changes are deliberately not enough to trigger
+  /// a scroll, because timeline scrubbing constantly shifts segments under
+  /// the cursor and any follow-the-hover scroll became a per-frame animation
+  /// that pinned the UI thread on Windows.
+  focusedKeepIndex = $state<number | null>(null);
   /// Downsampled amplitude envelope of the source audio, one peak per bin,
   /// uniformly spaced across the full duration. Populated asynchronously
   /// after a video is loaded.
@@ -294,6 +301,7 @@ class EditorStore {
     this.exportProgress = null;
     this.lastExport = null;
     this.hoveredKeepIndex = null;
+    this.focusedKeepIndex = null;
     this.currentTime = 0;
     this.usePreviewRange = false;
     if (this.detectTimer) {
@@ -304,6 +312,10 @@ class EditorStore {
 
   setHoveredKeep(i: number | null) {
     this.hoveredKeepIndex = i;
+  }
+
+  focusKeep(i: number | null) {
+    this.focusedKeepIndex = i;
   }
 
   resetParams() {

@@ -90,12 +90,21 @@
     if (!videoEl) return;
     const v = videoEl;
     let cancelled = false;
+    let scheduled = false;
+    let scheduleToken = 0;
+    let animationFrameId: number | null = null;
+    let videoFrameId: number | null = null;
     let lastSkipTarget = -1;
+    const frameVideo = v as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: () => void) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    };
 
     function tick() {
       if (cancelled) return;
       const t = v.currentTime;
       editor.currentTime = t;
+      const isPlaying = !v.paused && !v.ended;
       if (editor.skipRemoved && editor.cutlist) {
         const intervals = editor.cutlist.intervals;
         for (let i = 0; i < intervals.length; i++) {
@@ -110,13 +119,13 @@
           // Approaching an omitted interval from the kept side: skip a few
           // frames before we'd cross the boundary so the user never sees
           // the dead frame.
-          if (t < c.start && c.start - t < SKIP_LOOKAHEAD) {
+          if (isPlaying && t < c.start && c.start - t < SKIP_LOOKAHEAD) {
             performSkip(c.end);
             break;
           }
         }
       }
-      schedule();
+      if (isPlaying) schedule();
     }
 
     function performSkip(target: number) {
@@ -128,42 +137,82 @@
       v.currentTime = target;
     }
 
-    function schedule() {
-      if (cancelled) return;
-      // While paused, fall back to a single timeupdate-driven refresh so we
-      // don't spin a rAF loop indefinitely.
-      if (v.paused || v.ended) {
-        window.setTimeout(tick, 100);
-        return;
+    function clearScheduled() {
+      scheduleToken += 1;
+      scheduled = false;
+      if (animationFrameId !== null) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
       }
-      const anyV = v as unknown as {
-        requestVideoFrameCallback?: (cb: () => void) => number;
-      };
-      if (anyV.requestVideoFrameCallback) {
-        anyV.requestVideoFrameCallback(tick);
-      } else {
-        requestAnimationFrame(tick);
+      if (videoFrameId !== null) {
+        frameVideo.cancelVideoFrameCallback?.(videoFrameId);
+        videoFrameId = null;
       }
     }
 
-    function start() { cancelled = false; schedule(); }
-    function stop() { cancelled = true; }
+    function runScheduledTick(token: number) {
+      if (token !== scheduleToken) return;
+      scheduled = false;
+      animationFrameId = null;
+      videoFrameId = null;
+      tick();
+    }
+
+    function schedule() {
+      if (cancelled || scheduled || v.paused || v.ended) return;
+      scheduled = true;
+      const token = ++scheduleToken;
+      if (frameVideo.requestVideoFrameCallback) {
+        videoFrameId = frameVideo.requestVideoFrameCallback(() => {
+          runScheduledTick(token);
+        });
+      } else {
+        animationFrameId = requestAnimationFrame(() => {
+          runScheduledTick(token);
+        });
+      }
+    }
+
+    function start() {
+      cancelled = false;
+      schedule();
+    }
+
+    function stop() {
+      cancelled = true;
+      clearScheduled();
+    }
+
+    const onPause = () => {
+      editor.currentTime = v.currentTime;
+      stop();
+    };
     const onSeeked = () => {
       editor.currentTime = v.currentTime;
       lastSkipTarget = -1;
+      cancelled = false;
+      tick();
+    };
+    const onTimeUpdate = () => {
+      editor.currentTime = v.currentTime;
     };
 
     v.addEventListener("play", start);
     v.addEventListener("playing", start);
-    v.addEventListener("pause", () => { editor.currentTime = v.currentTime; });
+    v.addEventListener("pause", onPause);
+    v.addEventListener("ended", onPause);
     v.addEventListener("seeked", onSeeked);
-    schedule();
+    v.addEventListener("timeupdate", onTimeUpdate);
+    start();
 
     return () => {
       stop();
       v.removeEventListener("play", start);
       v.removeEventListener("playing", start);
+      v.removeEventListener("pause", onPause);
+      v.removeEventListener("ended", onPause);
       v.removeEventListener("seeked", onSeeked);
+      v.removeEventListener("timeupdate", onTimeUpdate);
     };
   });
 </script>

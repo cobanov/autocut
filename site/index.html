@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>autocut — remove silent gaps from videos</title>
+    <meta
+      name="description"
+      content="Drop a video, remove silent gaps, export an MP4 or send the timeline to DaVinci Resolve / Premiere. Free, local, runs on Apple Silicon."
+    />
+    <meta property="og:title" content="autocut" />
+    <meta
+      property="og:description"
+      content="Drop a video, remove silent gaps, export. Local, fast, free."
+    />
+    <meta property="og:image" content="/autocut.webp" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://autocut.cobanov.dev" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="head">
+        <h1 class="wordmark">autocut</h1>
+        <p class="tagline">
+          Drop a video, remove silent gaps, export an MP4 or send the timeline
+          to DaVinci Resolve / Premiere.
+        </p>
+      </header>
+
+      <figure class="hero">
+        <img
+          src="/autocut.webp"
+          alt="autocut showing a video timeline with silent segments marked"
+          width="2784"
+          height="1824"
+          loading="eager"
+          decoding="async"
+        />
+      </figure>
+
+      <section class="actions">
+        <a
+          class="btn btn-primary"
+          href="https://github.com/cobanov/autocut/releases/latest"
+          aria-label="Download autocut for macOS"
+        >
+          Download for macOS
+        </a>
+        <a
+          class="btn btn-ghost"
+          href="https://github.com/cobanov/autocut"
+        >
+          View on GitHub
+        </a>
+      </section>
+
+      <p class="meta mono">
+        Apple Silicon · macOS Sonoma+ · v0.4.2
+      </p>
+
+      <section class="install">
+        <p class="install-label">or via Homebrew</p>
+        <pre class="code mono"><code>brew install --cask cobanov/tap/autocut</code></pre>
+      </section>
+
+      <section class="features">
+        <ul>
+          <li>
+            <span class="glyph" aria-hidden="true">▸</span>
+            Silero VAD finds the spoken parts automatically. No cloud, no
+            uploads.
+          </li>
+          <li>
+            <span class="glyph" aria-hidden="true">▸</span>
+            Scrub the timeline, tweak thresholds, preview cuts before export.
+          </li>
+          <li>
+            <span class="glyph" aria-hidden="true">▸</span>
+            Export MP4, or send an FCPXML to DaVinci Resolve / Premiere / Final
+            Cut.
+          </li>
+        </ul>
+      </section>
+
+      <footer class="foot">
+        <p>
+          Made by
+          <a href="https://cobanov.dev">Mert Cobanov</a>
+          ·
+          <a href="https://github.com/cobanov/autocut">source</a>
+          ·
+          <a href="https://github.com/cobanov/autocut/issues">issues</a>
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

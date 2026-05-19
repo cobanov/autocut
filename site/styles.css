@@ -1,0 +1,242 @@
+:root {
+  --background:    hsl(240 10% 3.9%);
+  --surface:       hsl(240 6% 6%);
+  --surface-2:     hsl(240 5% 9%);
+  --elevated:      hsl(240 4% 11%);
+  --border:        hsl(240 4% 16%);
+  --border-strong: hsl(240 4% 22%);
+  --ring:          hsl(0 0% 90%);
+
+  --foreground:    hsl(0 0% 98%);
+  --muted:         hsl(240 5% 65%);
+  --muted-2:       hsl(240 4% 46%);
+
+  --primary:       hsl(0 0% 98%);
+  --primary-fg:    hsl(240 6% 10%);
+  --accent:        hsl(213 94% 68%);
+
+  --radius-sm: 4px;
+  --radius:    6px;
+  --radius-lg: 8px;
+
+  --font-sans: "Geist", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum", "zero";
+}
+
+a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 0.15s ease, color 0.15s ease;
+}
+
+a:hover {
+  text-decoration-color: var(--foreground);
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 96px 24px 72px;
+  text-align: center;
+}
+
+.head {
+  margin-bottom: 48px;
+}
+
+.wordmark {
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 0 0 16px;
+  line-height: 1;
+}
+
+.tagline {
+  font-size: 17px;
+  color: var(--muted);
+  max-width: 520px;
+  margin: 0 auto;
+  line-height: 1.5;
+}
+
+.hero {
+  margin: 0 0 40px;
+  padding: 0;
+}
+
+.hero img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-fg);
+}
+
+.btn-primary:hover {
+  background: hsl(0 0% 90%);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--foreground);
+}
+
+.btn-ghost:hover {
+  border-color: var(--foreground);
+  background: var(--surface);
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--muted-2);
+  letter-spacing: 0.02em;
+  margin: 0 0 56px;
+}
+
+.install {
+  margin: 0 auto 64px;
+  max-width: 520px;
+}
+
+.install-label {
+  font-size: 12px;
+  color: var(--muted-2);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+.code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--foreground);
+  margin: 0;
+  overflow-x: auto;
+  text-align: left;
+}
+
+.code code {
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.features {
+  text-align: left;
+  max-width: 520px;
+  margin: 0 auto 64px;
+}
+
+.features ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.features li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.features .glyph {
+  color: var(--muted-2);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.foot {
+  border-top: 1px solid var(--border);
+  padding-top: 24px;
+  font-size: 13px;
+  color: var(--muted-2);
+}
+
+.foot p { margin: 0; }
+.foot a { color: var(--muted); }
+.foot a:hover { color: var(--foreground); }
+
+@media (max-width: 640px) {
+  .container {
+    padding: 56px 20px 56px;
+  }
+  .wordmark {
+    font-size: 36px;
+  }
+  .tagline {
+    font-size: 15.5px;
+  }
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btn {
+    width: 100%;
+  }
+}

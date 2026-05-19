@@ -2,7 +2,6 @@
   --background:    hsl(0 0% 100%);
   --surface:       hsl(240 5% 98%);
   --surface-2:     hsl(240 5% 96%);
-  --elevated:      hsl(240 5% 94%);
   --border:        hsl(240 4% 88%);
   --border-strong: hsl(240 4% 78%);
   --ring:          hsl(240 6% 10%);
@@ -13,7 +12,6 @@
 
   --primary:       hsl(240 6% 10%);
   --primary-fg:    hsl(0 0% 100%);
-  --accent:        hsl(213 94% 50%);
 
   --radius-sm: 4px;
   --radius:    6px;
@@ -32,9 +30,16 @@ html, body {
   color: var(--foreground);
   font-family: var(--font-sans);
   font-size: 15px;
-  line-height: 1.55;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .mono {
@@ -55,40 +60,53 @@ a:hover {
 }
 
 .container {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 96px 24px 72px;
+  width: 100%;
+  max-width: 760px;
+  padding: clamp(20px, 4vh, 40px) 24px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 2.5vh, 28px);
+  align-items: center;
 }
 
 .head {
-  margin-bottom: 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
 }
 
 .wordmark {
-  font-size: 44px;
+  font-size: clamp(28px, 5vw, 40px);
   font-weight: 600;
   letter-spacing: -0.03em;
-  margin: 0 0 16px;
+  margin: 0;
   line-height: 1;
 }
 
 .tagline {
-  font-size: 17px;
+  font-size: clamp(14px, 1.8vw, 16px);
   color: var(--muted);
-  max-width: 520px;
-  margin: 0 auto;
-  line-height: 1.5;
+  max-width: 460px;
+  margin: 0;
+  line-height: 1.45;
 }
 
 .hero {
-  margin: 0 0 40px;
+  margin: 0;
   padding: 0;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
 }
 
 .hero img {
   width: 100%;
+  max-height: min(58vh, 520px);
   height: auto;
+  object-fit: contain;
   display: block;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -97,18 +115,17 @@ a:hover {
 
 .actions {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
-  margin-bottom: 16px;
 }
 
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 40px;
-  padding: 0 20px;
+  height: 38px;
+  padding: 0 18px;
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 500;
@@ -116,6 +133,7 @@ a:hover {
   text-decoration: none;
   border: 1px solid transparent;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
 
 .btn:focus-visible {
@@ -147,96 +165,47 @@ a:hover {
   font-size: 12px;
   color: var(--muted-2);
   letter-spacing: 0.02em;
-  margin: 0 0 56px;
-}
-
-.install {
-  margin: 0 auto 64px;
-  max-width: 520px;
-}
-
-.install-label {
-  font-size: 12px;
-  color: var(--muted-2);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  margin: 0 0 10px;
-}
-
-.code {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  font-size: 13px;
-  color: var(--foreground);
   margin: 0;
-  overflow-x: auto;
-  text-align: left;
 }
 
-.code code {
-  background: none;
-  padding: 0;
-  font: inherit;
+.meta a {
   color: inherit;
+  text-decoration-color: var(--border);
 }
 
-.features {
-  text-align: left;
-  max-width: 520px;
-  margin: 0 auto 64px;
+.meta a:hover {
+  color: var(--foreground);
 }
-
-.features ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 14px;
-}
-
-.features li {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  color: var(--muted);
-  font-size: 14.5px;
-  line-height: 1.55;
-}
-
-.features .glyph {
-  color: var(--muted-2);
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.foot {
-  border-top: 1px solid var(--border);
-  padding-top: 24px;
-  font-size: 13px;
-  color: var(--muted-2);
-}
-
-.foot p { margin: 0; }
-.foot a { color: var(--muted); }
-.foot a:hover { color: var(--foreground); }
 
 @media (max-width: 640px) {
   .container {
-    padding: 56px 20px 56px;
+    gap: 16px;
+    padding: 20px 16px;
   }
-  .wordmark {
-    font-size: 36px;
-  }
-  .tagline {
-    font-size: 15.5px;
+  .hero img {
+    max-height: 50vh;
   }
   .actions {
+    width: 100%;
     flex-direction: column;
-    align-items: stretch;
   }
   .btn {
     width: 100%;
+  }
+}
+
+@media (max-height: 560px) and (orientation: landscape) {
+  .container {
+    gap: 12px;
+    padding: 12px 24px;
+  }
+  .hero img {
+    max-height: 55vh;
+  }
+  .wordmark {
+    font-size: 24px;
+  }
+  .tagline {
+    font-size: 13px;
   }
 }

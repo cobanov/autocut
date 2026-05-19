@@ -164,7 +164,7 @@
   <footer class="meta mono muted-2">
     <span><span class="brand-dot"></span> autocut</span>
     <span class="sep">·</span>
-    <span>v0.3.2</span>
+    <span>v{__APP_VERSION__}</span>
     <span class="sep">·</span>
     <button
       class="link"

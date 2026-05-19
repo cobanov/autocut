@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { editor } from "../lib/store.svelte";
 
   const MIN_VIEW_SPAN = 1.5;
@@ -30,14 +31,18 @@
     }
   });
 
-  // Keep the playhead inside the visible window. When it drifts past the
-  // right edge during playback (or when a click in the cuts panel seeks
-  // somewhere off-screen), recenter the view on the playhead so the user
-  // can see what's happening. Only auto-pans when zoomed in (otherwise
-  // the entire timeline is visible already). The 8% margin gives the
-  // playhead some headroom before triggering, so it doesn't constantly
-  // micro-shift while playing through the middle of the window.
+  // Auto-pan rules:
+  //   - While playing: keep the playhead inside the visible window. When it
+  //     reaches the right edge, scroll the window forward 80% of its span so
+  //     the next chunk fits without disorienting the eye.
+  //   - While paused: do nothing. The user owns the view and can pan/zoom
+  //     freely. Auto-panning during pause locked the window to the
+  //     playhead and made scroll-to-pan unusable.
+  //   - On a far jump (e.g. a click in the cuts panel that lands fully
+  //     outside the window): recenter regardless of play state, since the
+  //     user explicitly asked to go there. Detected via the seekToken bump.
   $effect(() => {
+    if (!editor.isPlaying) return;
     const t = editor.currentTime;
     if (!duration) return;
     const span = viewEnd - viewStart;
@@ -46,13 +51,8 @@
     const tooLate = t > viewEnd - margin;
     const tooEarly = t < viewStart + margin;
     if (!tooLate && !tooEarly) return;
-    // If the playhead is fully outside the window (e.g. a click in the
-    // cuts panel jumped to a far point), recenter. If it just slipped past
-    // the edge during playback, scroll the window forward by 80% of its
-    // span so the next chunk fits on screen without disorienting the eye.
-    const fullyOutside = t < viewStart || t > viewEnd;
     let newStart: number;
-    if (fullyOutside) {
+    if (t < viewStart || t > viewEnd) {
       newStart = t - span / 2;
     } else if (tooLate) {
       newStart = viewStart + span * 0.8;
@@ -62,6 +62,31 @@
     const [s, en] = clampWindow(newStart, newStart + span);
     viewStart = s;
     viewEnd = en;
+  });
+
+  // Explicit seeks (cuts panel click, prev/next-keep transport) recenter the
+  // window even when paused, because the user just asked to go somewhere.
+  // We MUST only act when `seekToken` itself bumps - if the effect also
+  // depended on `viewStart`/`viewEnd`, a manual pan would re-fire it and
+  // snap the window back to the playhead, defeating the whole pause-pan
+  // workflow. So: track only the token, and read viewStart/viewEnd inside
+  // an untracked branch.
+  let lastSeekToken = 0;
+  $effect(() => {
+    const token = editor.seekToken;
+    if (token === lastSeekToken) return;
+    lastSeekToken = token;
+    if (!duration) return;
+    untrack(() => {
+      const t = editor.seekTarget;
+      const span = viewEnd - viewStart;
+      if (span >= duration - 0.001) return;
+      if (t >= viewStart && t <= viewEnd) return;
+      const newStart = t - span / 2;
+      const [s, en] = clampWindow(newStart, newStart + span);
+      viewStart = s;
+      viewEnd = en;
+    });
   });
 
   let viewSpan = $derived(Math.max(0.001, viewEnd - viewStart));

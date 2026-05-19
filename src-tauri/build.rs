@@ -18,6 +18,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Pinned BtbN FFmpeg release. To rotate:
+//   1. Pick a new release at https://github.com/BtbN/FFmpeg-Builds/releases
+//   2. Update BTBN_RELEASE to its tag (e.g. autobuild-YYYY-MM-DD-HH-MM)
+//   3. Update the filename + sha256 of every asset in btbn_asset() below
+//      Hashes are listed on the release page; verify locally with
+//      `shasum -a 256` (or `sha256sum`) before pasting.
 const BTBN_RELEASE: &str = "autobuild-2026-05-18-18-09";
 
 struct BtbnAsset {

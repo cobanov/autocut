@@ -41,6 +41,13 @@
       {/if}
     </button>
 
+    {#if editor.detectError}
+      <div class="error">
+        <span class="dot dot-neg"></span>
+        <span class="mono">{editor.detectError}</span>
+      </div>
+    {/if}
+
     <div class="fields">
       <Slider
         label="threshold"
@@ -126,5 +133,22 @@
     font-size: 9px;
     line-height: 14px;
     margin: 0 1px;
+  }
+  .error {
+    margin-top: 12px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 8px 10px;
+    background: hsl(0 84% 65% / 0.06);
+    border: 1px solid hsl(0 84% 65% / 0.25);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--neg);
+    word-break: break-word;
+  }
+  .error .dot {
+    margin-top: 5px;
+    flex-shrink: 0;
   }
 </style>

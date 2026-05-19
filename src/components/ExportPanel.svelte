@@ -41,7 +41,7 @@
   /// OS, sidecar paths) and the current export settings. Gives the
   /// developer enough to reproduce the failure without a back-and-forth.
   async function copyErrorReport() {
-    if (!editor.error) return;
+    if (!editor.exportError) return;
     try {
       const diag = await diagnosticInfo();
       const lines = [
@@ -59,7 +59,7 @@
         "",
         "error",
         "-----",
-        editor.error,
+        editor.exportError,
       ];
       await navigator.clipboard.writeText(lines.join("\n"));
       copyState = "copied";
@@ -202,7 +202,7 @@
       </div>
     {/if}
 
-    {#if editor.error}
+    {#if editor.exportError}
       <div class="error">
         <div class="error-head">
           <span class="dot dot-neg"></span>
@@ -217,7 +217,7 @@
             {:else}copy details{/if}
           </button>
         </div>
-        <pre class="error-body mono">{editor.error}</pre>
+        <pre class="error-body mono">{editor.exportError}</pre>
       </div>
     {/if}
   </div>

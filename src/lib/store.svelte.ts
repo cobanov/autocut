@@ -83,7 +83,11 @@ class EditorStore {
   skipRemoved = $state(true);
   jobStatus = $state<JobStatus>("idle");
   exportProgress = $state<{ pct: number; message: string } | null>(null);
-  error = $state<string | null>(null);
+  loadError = $state<string | null>(null);
+  detectError = $state<string | null>(null);
+  exportError = $state<string | null>(null);
+  waveformError = $state<string | null>(null);
+  detectQueued = $state(false);
 
   /// Increments on every requestSeek() so VideoPlayer can drive the
   /// underlying <video> imperatively without binding currentTime two-way.
@@ -97,12 +101,22 @@ class EditorStore {
   isPlaying = $state(false);
 
   private detectTimer: ReturnType<typeof setTimeout> | null = null;
-  private progressUnlisten: (() => void) | null = null;
+  private sessionId = 0;
+
+  private isCurrentVideo(sessionId: number, path: string) {
+    return this.sessionId === sessionId && this.video?.path === path;
+  }
 
   async loadVideo(path: string) {
-    this.error = null;
+    const sessionId = ++this.sessionId;
+    this.loadError = null;
+    this.detectError = null;
+    this.exportError = null;
+    this.waveformError = null;
+    this.detectQueued = false;
     this.cutlist = null;
     this.waveform = null;
+    this.lastExport = null;
     // Surface the path immediately so the <video> tag starts streaming bytes
     // while ffprobe is running. ffprobe is usually fast but on multi-GB
     // sources it can take a second or two, and we don't want the UI to look
@@ -110,25 +124,27 @@ class EditorStore {
     this.pendingPath = path;
     try {
       const info = await openVideo(path);
+      if (this.sessionId !== sessionId || this.pendingPath !== path) return;
       this.video = info;
       this.currentTime = 0;
       // Detection is manual on first run so the preview opens immediately.
       // After the first detect, slider changes auto-rerun (see scheduleDetect).
       // Waveform extraction is fire-and-forget — the player works without it.
-      this.fetchWaveform(path);
+      this.fetchWaveform(path, sessionId);
     } catch (err) {
+      if (this.sessionId !== sessionId || this.pendingPath !== path) return;
       // Reset BOTH video and pendingPath so the dropzone screen comes back,
-      // but keep `error` set — Dropzone reads it and surfaces it. Otherwise
+      // but keep `loadError` set — Dropzone reads it and surfaces it. Otherwise
       // a failure in ffprobe (e.g. macOS Gatekeeper blocking the sidecar
       // binary, or an unreadable file) shows nothing and looks like the app
       // ate the drop.
-      this.error = String(err);
+      this.loadError = String(err);
       this.video = null;
       this.pendingPath = null;
     }
   }
 
-  private async fetchWaveform(path: string) {
+  private async fetchWaveform(path: string, sessionId: number) {
     try {
       // Scale bin count with duration so very long clips still have enough
       // detail when zoomed in 50x-100x via the navigator. A flat 2000-bin
@@ -139,11 +155,14 @@ class EditorStore {
       const w = await computeWaveform(path, bins);
       // Guard against races: if the user already loaded a different video
       // while waveform extraction was running, drop the result.
-      if (this.video?.path === path) {
+      if (this.isCurrentVideo(sessionId, path)) {
         this.waveform = w;
+        this.waveformError = null;
       }
-    } catch {
-      /* non-fatal: timeline just renders without the waveform overlay */
+    } catch (err) {
+      if (this.isCurrentVideo(sessionId, path)) {
+        this.waveformError = String(err);
+      }
     }
   }
 
@@ -162,35 +181,46 @@ class EditorStore {
     const keeps = this.keepIntervals();
     if (!keeps.length) return;
     const t = this.currentTime;
-    let curr = -1;
+    const current = keeps.findIndex((k) => t >= k.start && t < k.end);
+    if (current >= 0) {
+      if (t - keeps[current].start > 1.0) {
+        this.requestSeek(keeps[current].start);
+      } else if (current > 0) {
+        this.requestSeek(keeps[current - 1].start);
+      } else {
+        this.requestSeek(keeps[current].start);
+      }
+      return;
+    }
+
+    let previous = -1;
     for (let i = 0; i < keeps.length; i++) {
-      if (keeps[i].start <= t) curr = i;
+      if (keeps[i].end <= t) previous = i;
       else break;
     }
-    if (curr === -1) {
+    if (previous === -1) {
       this.requestSeek(keeps[0].start);
       return;
     }
-    if (t - keeps[curr].start > 1.0) {
-      this.requestSeek(keeps[curr].start);
-    } else if (curr > 0) {
-      this.requestSeek(keeps[curr - 1].start);
-    } else {
-      this.requestSeek(keeps[curr].start);
-    }
+    this.requestSeek(keeps[previous].start);
   }
 
   nextKeep() {
     const keeps = this.keepIntervals();
     if (!keeps.length) return;
     const t = this.currentTime;
+    const current = keeps.find((k) => t >= k.start && t < k.end);
     for (const k of keeps) {
       if (k.start > t + 0.05) {
         this.requestSeek(k.start);
         return;
       }
     }
-    this.requestSeek(keeps[keeps.length - 1].start);
+    if (current) {
+      this.requestSeek(current.end);
+    } else if (this.video) {
+      this.requestSeek(this.video.duration);
+    }
   }
 
   // Debounced rerun. Parameter sliders call scheduleDetect() on every change.
@@ -202,73 +232,113 @@ class EditorStore {
     this.detectTimer = setTimeout(() => this.runDetectNow(), delayMs);
   }
 
-  async runDetectNow() {
-    if (!this.video || this.jobStatus === "exporting") return;
+  async runDetectNow(): Promise<boolean> {
     if (this.detectTimer) {
       clearTimeout(this.detectTimer);
       this.detectTimer = null;
     }
+    if (!this.video || this.jobStatus === "exporting") return false;
+    if (this.jobStatus === "detecting") {
+      this.detectQueued = true;
+      return false;
+    }
+    const sessionId = this.sessionId;
+    const path = this.video.path;
+    const duration = this.video.duration;
     this.jobStatus = "detecting";
-    this.error = null;
+    this.detectError = null;
     try {
       const params: DetectParams = { ...this.params, preview_range: null };
       const res = await detectSilence(
-        this.video.path,
-        this.video.duration,
+        path,
+        duration,
         params,
       );
+      if (!this.isCurrentVideo(sessionId, path)) return false;
       this.cutlist = res.cutlist;
+      return true;
     } catch (err) {
-      this.error = String(err);
+      if (this.isCurrentVideo(sessionId, path)) {
+        this.detectError = String(err);
+      }
+      return false;
     } finally {
-      this.jobStatus = "idle";
+      if (this.isCurrentVideo(sessionId, path)) {
+        this.jobStatus = "idle";
+        if (this.detectQueued) {
+          this.detectQueued = false;
+          setTimeout(() => {
+            if (
+              this.isCurrentVideo(sessionId, path) &&
+              this.jobStatus === "idle"
+            ) {
+              void this.runDetectNow();
+            }
+          }, 0);
+        }
+      }
     }
   }
 
   async exportMp4(outputPath: string) {
     if (!this.video || !this.cutlist) return;
+    const sessionId = this.sessionId;
     const normalized = this.normalizedCutlist();
     if (!normalized) return;
+    const source = this.video.path;
     this.lastExport = null;
     this.jobStatus = "exporting";
     this.exportProgress = { pct: 0, message: "starting" };
-    this.error = null;
-    const unlisten = await onExportProgress((e) => {
-      this.exportProgress = e;
-    });
-    this.progressUnlisten = unlisten;
+    this.exportError = null;
+    let unlisten: (() => void) | null = null;
     try {
-      await apiExportMp4(this.video.path, outputPath, normalized, this.exportOptions);
+      unlisten = await onExportProgress((e) => {
+        if (this.isCurrentVideo(sessionId, source)) {
+          this.exportProgress = e;
+        }
+      });
+      if (!this.isCurrentVideo(sessionId, source)) return;
+      await apiExportMp4(source, outputPath, normalized, this.exportOptions);
+      if (!this.isCurrentVideo(sessionId, source)) return;
       this.exportProgress = { pct: 100, message: "done" };
       this.lastExport = { path: outputPath, format: "mp4" };
       announceExport(outputPath, "mp4");
     } catch (err) {
-      this.error = String(err);
+      if (this.isCurrentVideo(sessionId, source)) {
+        this.exportError = String(err);
+      }
     } finally {
-      unlisten();
-      this.progressUnlisten = null;
-      this.jobStatus = "idle";
+      unlisten?.();
+      if (this.isCurrentVideo(sessionId, source)) {
+        this.jobStatus = "idle";
+      }
     }
   }
 
   async exportFcpxml(outputPath: string, title: string) {
     if (!this.video || !this.cutlist) return;
+    const sessionId = this.sessionId;
     const normalized = this.normalizedCutlist();
     if (!normalized) return;
+    const source = this.video.path;
     this.lastExport = null;
+    this.exportError = null;
     try {
       await apiExportFcpxml(
-        this.video.path,
+        source,
         outputPath,
         normalized,
         this.video.fps,
         this.video.start_timecode,
         title,
       );
+      if (!this.isCurrentVideo(sessionId, source)) return;
       this.lastExport = { path: outputPath, format: "fcpxml" };
       announceExport(outputPath, "fcpxml");
     } catch (err) {
-      this.error = String(err);
+      if (this.isCurrentVideo(sessionId, source)) {
+        this.exportError = String(err);
+      }
     }
   }
 
@@ -277,19 +347,31 @@ class EditorStore {
   }
 
   closeVideo() {
+    const wasExporting = this.jobStatus === "exporting";
+    this.sessionId += 1;
     this.video = null;
     this.pendingPath = null;
     this.cutlist = null;
     this.waveform = null;
-    this.error = null;
+    this.loadError = null;
+    this.detectError = null;
+    this.exportError = null;
+    this.waveformError = null;
+    this.detectQueued = false;
     this.exportProgress = null;
     this.lastExport = null;
     this.hoveredKeepIndex = null;
     this.focusedKeepIndex = null;
     this.currentTime = 0;
+    this.jobStatus = "idle";
     if (this.detectTimer) {
       clearTimeout(this.detectTimer);
       this.detectTimer = null;
+    }
+    if (wasExporting) {
+      void apiCancelExport().catch(() => {
+        /* best-effort: closing the project should not surface cancel errors */
+      });
     }
   }
 
@@ -303,7 +385,9 @@ class EditorStore {
 
   resetParams() {
     this.params = { ...DEFAULTS };
-    this.runDetectNow();
+    if (this.cutlist) {
+      void this.runDetectNow();
+    }
   }
 
   // ---- manual cutlist editing ----
@@ -331,9 +415,9 @@ class EditorStore {
       const last = merged[merged.length - 1];
       if (last && k.start <= last.end) {
         last.end = Math.max(last.end, k.end);
-        // Merging keeps: if either side is disabled, treat the merged as
-        // disabled (user has to explicitly re-enable).
-        last.disabled = last.disabled || k.disabled;
+        // When an active keep overlaps a disabled keep, active content wins.
+        // Otherwise a tiny drag overlap can silently remove good footage.
+        last.disabled = last.disabled && k.disabled;
       } else {
         merged.push({ ...k });
       }

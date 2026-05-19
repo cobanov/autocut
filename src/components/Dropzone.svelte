@@ -19,7 +19,7 @@
   }
 
   async function copyDetails() {
-    if (!editor.error) return;
+    if (!editor.loadError) return;
     let diag = "";
     try {
       const d = await diagnosticInfo();
@@ -37,7 +37,7 @@
       "====================",
       "",
       "error:",
-      editor.error,
+      editor.loadError,
       "",
       "video path:",
       lastAttemptedPath ?? "(unknown)",
@@ -57,24 +57,28 @@
   onMount(() => {
     let unlisten: (() => void) | null = null;
     (async () => {
-      const webview = getCurrentWebview();
-      unlisten = await webview.onDragDropEvent((event) => {
-        if (event.payload.type === "over") {
-          hovering = true;
-        } else if (event.payload.type === "leave") {
-          hovering = false;
-        } else if (event.payload.type === "drop") {
-          hovering = false;
-          const p = event.payload.paths[0];
-          if (!p) return;
-          lastAttemptedPath = p;
-          if (/\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(p)) {
-            editor.loadVideo(p);
-          } else {
-            editor.error = `unsupported file format: ${p.split(/[/\\]/).pop()}`;
+      try {
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent((event) => {
+          if (event.payload.type === "over") {
+            hovering = true;
+          } else if (event.payload.type === "leave") {
+            hovering = false;
+          } else if (event.payload.type === "drop") {
+            hovering = false;
+            const p = event.payload.paths[0];
+            if (!p) return;
+            lastAttemptedPath = p;
+            if (/\.(mp4|mov|m4v|mkv|webm|avi)$/i.test(p)) {
+              editor.loadVideo(p);
+            } else {
+              editor.loadError = `unsupported file format: ${p.split(/[/\\]/).pop()}`;
+            }
           }
-        }
-      });
+        });
+      } catch {
+        /* Browser preview lacks Tauri's webview drag/drop API. */
+      }
     })();
     return () => unlisten?.();
   });
@@ -135,7 +139,7 @@
       <span class="mono">avi</span>
     </div>
 
-    {#if editor.error}
+    {#if editor.loadError}
       <div class="error">
         <div class="error-row">
           <span class="error-head mono">couldn't open that video</span>
@@ -143,13 +147,13 @@
             <button class="error-btn" onclick={copyDetails} title="Copy a full error report (error + diagnostic info) to the clipboard">
               {copied ? "copied" : "copy details"}
             </button>
-            <button class="error-btn" onclick={() => (editor.error = null)} title="Dismiss this error">
+            <button class="error-btn" onclick={() => (editor.loadError = null)} title="Dismiss this error">
               dismiss
             </button>
           </div>
         </div>
-        <pre class="error-body mono">{editor.error}</pre>
-        {#if /gatekeeper|denied|not permitted|operation not permitted|killed|cannot be opened/i.test(editor.error)}
+        <pre class="error-body mono">{editor.loadError}</pre>
+        {#if /gatekeeper|denied|not permitted|operation not permitted|killed|cannot be opened/i.test(editor.loadError)}
           <div class="error-hint">
             macOS is blocking the bundled ffmpeg helper. open Terminal and
             run once:

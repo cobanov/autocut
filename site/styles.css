@@ -1,19 +1,19 @@
 :root {
-  --background:    hsl(240 10% 3.9%);
-  --surface:       hsl(240 6% 6%);
-  --surface-2:     hsl(240 5% 9%);
-  --elevated:      hsl(240 4% 11%);
-  --border:        hsl(240 4% 16%);
-  --border-strong: hsl(240 4% 22%);
-  --ring:          hsl(0 0% 90%);
+  --background:    hsl(0 0% 100%);
+  --surface:       hsl(240 5% 98%);
+  --surface-2:     hsl(240 5% 96%);
+  --elevated:      hsl(240 5% 94%);
+  --border:        hsl(240 4% 88%);
+  --border-strong: hsl(240 4% 78%);
+  --ring:          hsl(240 6% 10%);
 
-  --foreground:    hsl(0 0% 98%);
-  --muted:         hsl(240 5% 65%);
-  --muted-2:       hsl(240 4% 46%);
+  --foreground:    hsl(240 10% 4%);
+  --muted:         hsl(240 4% 40%);
+  --muted-2:       hsl(240 4% 54%);
 
-  --primary:       hsl(0 0% 98%);
-  --primary-fg:    hsl(240 6% 10%);
-  --accent:        hsl(213 94% 68%);
+  --primary:       hsl(240 6% 10%);
+  --primary-fg:    hsl(0 0% 100%);
+  --accent:        hsl(213 94% 50%);
 
   --radius-sm: 4px;
   --radius:    6px;
@@ -129,7 +129,7 @@ a:hover {
 }
 
 .btn-primary:hover {
-  background: hsl(0 0% 90%);
+  background: hsl(240 6% 20%);
 }
 
 .btn-ghost {

@@ -18,6 +18,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const BTBN_RELEASE: &str = "autobuild-2026-05-18-18-09";
+
+struct BtbnAsset {
+    filename: &'static str,
+    sha256: &'static str,
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=build.rs");
@@ -40,7 +47,11 @@ fn ensure_ffmpeg() -> Result<(), String> {
     let bin_dir = manifest.join("binaries");
     fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
-    let ext = if triple.contains("windows") { ".exe" } else { "" };
+    let ext = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let ffmpeg = bin_dir.join(format!("ffmpeg-{triple}{ext}"));
     let ffprobe = bin_dir.join(format!("ffprobe-{triple}{ext}"));
 
@@ -57,7 +68,11 @@ fn ensure_ffmpeg() -> Result<(), String> {
     } else if triple == "x86_64-apple-darwin" {
         fetch_macos_x86_64(&tmp, &ffmpeg, &ffprobe)?;
     } else if triple.contains("linux") {
-        let arch = if triple.starts_with("aarch64") { "linuxarm64" } else { "linux64" };
+        let arch = if triple.starts_with("aarch64") {
+            "linuxarm64"
+        } else {
+            "linux64"
+        };
         fetch_btbn(&tmp, arch, "tar.xz", &ffmpeg, &ffprobe)?;
     } else if triple.contains("windows") {
         fetch_btbn(&tmp, "win64", "zip", &ffmpeg, &ffprobe)?;
@@ -104,8 +119,59 @@ fn run(cmd: &mut Command) -> Result<(), String> {
     Ok(())
 }
 
+fn command_output(cmd: &mut Command) -> Result<String, String> {
+    let output = cmd.output().map_err(|e| format!("{:?}: {e}", cmd))?;
+    if !output.status.success() {
+        return Err(format!("{:?} failed with {}", cmd, output.status));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn curl(url: &str, dst: &Path) -> Result<(), String> {
     run(Command::new("curl").args(["-fsSL", "-o"]).arg(dst).arg(url))
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let actual = sha256_file(path)?;
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "checksum mismatch for {}: expected {expected}, got {actual}",
+            path.display()
+        ))
+    }
+}
+
+fn parse_checksum_output(output: &str) -> Result<String, String> {
+    output
+        .split_whitespace()
+        .next()
+        .map(|s| s.to_ascii_lowercase())
+        .ok_or_else(|| "empty checksum output".to_string())
+}
+
+#[cfg(windows)]
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let out = command_output(
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-FileHash -Algorithm SHA256 -LiteralPath $args[0]).Hash.ToLowerInvariant()",
+            ])
+            .arg(path),
+    )?;
+    parse_checksum_output(&out)
+}
+
+#[cfg(not(windows))]
+fn sha256_file(path: &Path) -> Result<String, String> {
+    if let Ok(out) = command_output(Command::new("shasum").args(["-a", "256"]).arg(path)) {
+        return parse_checksum_output(&out);
+    }
+    let out = command_output(Command::new("sha256sum").arg(path))?;
+    parse_checksum_output(&out)
 }
 
 fn fetch_macos_x86_64(tmp: &Path, ffmpeg: &Path, ffprobe: &Path) -> Result<(), String> {
@@ -171,10 +237,14 @@ fn fetch_btbn(
     ffmpeg: &Path,
     ffprobe: &Path,
 ) -> Result<(), String> {
-    let filename = format!("ffmpeg-master-latest-{arch_slug}-gpl.{ext}");
-    let url = format!("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/{filename}");
-    let archive = tmp.join(&filename);
+    let asset = btbn_asset(arch_slug, ext)?;
+    let url = format!(
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/{BTBN_RELEASE}/{}",
+        asset.filename
+    );
+    let archive = tmp.join(asset.filename);
     curl(&url, &archive)?;
+    verify_sha256(&archive, asset.sha256)?;
 
     let extract = tmp.join("extract");
     let _ = fs::remove_dir_all(&extract);
@@ -202,6 +272,24 @@ fn fetch_btbn(
     fs::copy(ffmpeg_src, ffmpeg).map_err(|e| e.to_string())?;
     fs::copy(ffprobe_src, ffprobe).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn btbn_asset(arch_slug: &str, ext: &str) -> Result<BtbnAsset, String> {
+    match (arch_slug, ext) {
+        ("linux64", "tar.xz") => Ok(BtbnAsset {
+            filename: "ffmpeg-N-124532-gb4d11dffbf-linux64-gpl.tar.xz",
+            sha256: "b9121c11ceb5dc9456af3a7b3f9d5ead7b8d2465b9374f3ff202ae4f21d15504",
+        }),
+        ("linuxarm64", "tar.xz") => Ok(BtbnAsset {
+            filename: "ffmpeg-N-124532-gb4d11dffbf-linuxarm64-gpl.tar.xz",
+            sha256: "07b11bb203eb2358b014664fdbcfde4ea6561d0e2a312463101c1e4602e6f683",
+        }),
+        ("win64", "zip") => Ok(BtbnAsset {
+            filename: "ffmpeg-N-124532-gb4d11dffbf-win64-gpl.zip",
+            sha256: "63ec9a63cd9e82e10cac803ba6559c25d28fe38fb7743ba3621e20c71a484438",
+        }),
+        _ => Err(format!("no pinned BtbN asset for {arch_slug}.{ext}")),
+    }
 }
 
 fn find_binary(root: &Path, leaf: &str) -> Result<PathBuf, String> {

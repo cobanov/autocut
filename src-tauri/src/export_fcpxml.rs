@@ -21,6 +21,7 @@ pub struct FcpxmlParams<'a> {
     pub asset_path: Option<&'a Path>,
     pub start_timecode: Option<&'a str>,
     pub title: &'a str,
+    pub has_audio: bool,
 }
 
 pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
@@ -60,6 +61,11 @@ pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
     }
 
     let media_src_attr = xml_escape(&media_src);
+    let audio_attrs = if params.has_audio {
+        r#" hasAudio="1" audioSources="1" audioChannels="2""#
+    } else {
+        r#" hasAudio="0""#
+    };
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -67,7 +73,7 @@ pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
 <fcpxml version="1.11">
   <resources>
     <format id="f1" name="FFVideoFormat" frameDuration="{frame_duration}" />
-    <asset id="r1" name="{safe_title}" start="{asset_start}" duration="{asset_duration}" hasVideo="1" hasAudio="1" audioSources="1" audioChannels="2" videoSources="1">
+    <asset id="r1" name="{safe_title}" start="{asset_start}" duration="{asset_duration}" hasVideo="1"{audio_attrs} videoSources="1">
       <media-rep kind="original-media" src="{media_src_attr}"/>
     </asset>
   </resources>
@@ -162,6 +168,7 @@ mod tests {
                 asset_path: None,
                 start_timecode: Some("01:00:00;00"),
                 title: "demo",
+                has_audio: true,
             },
         );
         // tcFormat for 29.97 drop-frame
@@ -187,6 +194,7 @@ mod tests {
                 asset_path: None,
                 start_timecode: None,
                 title: "demo",
+                has_audio: true,
             },
         );
         assert!(xml.contains("tcFormat=\"NDF\""));
@@ -203,8 +211,27 @@ mod tests {
                 asset_path: None,
                 start_timecode: None,
                 title: "a & b <c>",
+                has_audio: true,
             },
         );
         assert!(xml.contains("a &amp; b &lt;c&gt;"));
+    }
+
+    #[test]
+    fn marks_audio_absent_when_source_has_no_audio() {
+        let cutlist = cl(vec![(0.0, 1.0, CutKind::Keep)], 1.0);
+        let xml = render(
+            &cutlist,
+            FcpxmlParams {
+                fps: 30.0,
+                asset_path: None,
+                start_timecode: None,
+                title: "silent",
+                has_audio: false,
+            },
+        );
+        assert!(xml.contains("hasAudio=\"0\""), "{xml}");
+        assert!(!xml.contains("audioSources="), "{xml}");
+        assert!(!xml.contains("audioChannels="), "{xml}");
     }
 }

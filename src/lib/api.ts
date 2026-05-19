@@ -45,6 +45,7 @@ export async function exportMp4(
   output: string,
   cutlist: CutList,
   options: ExportOptions,
+  hasAudio: boolean,
 ): Promise<void> {
   await invoke("export_mp4", {
     args: {
@@ -53,6 +54,7 @@ export async function exportMp4(
       cutlist,
       quality: options.quality,
       resolution: options.resolution,
+      has_audio: hasAudio,
     },
   });
 }
@@ -76,6 +78,7 @@ export async function exportFcpxml(
   fps: number,
   startTimecode: string | null,
   title: string,
+  hasAudio: boolean,
 ): Promise<void> {
   await invoke("export_fcpxml", {
     args: {
@@ -85,6 +88,7 @@ export async function exportFcpxml(
       fps,
       start_timecode: startTimecode,
       title,
+      has_audio: hasAudio,
     },
   });
 }

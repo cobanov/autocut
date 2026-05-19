@@ -6,6 +6,7 @@ export type VideoInfo = {
   fps: number;
   width: number;
   height: number;
+  has_audio: boolean;
   start_timecode: string | null;
 };
 

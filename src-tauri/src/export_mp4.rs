@@ -74,11 +74,16 @@ impl Resolution {
 pub struct ExportOptions {
     pub quality: Quality,
     pub resolution: Resolution,
+    pub has_audio: bool,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { quality: Quality::Medium, resolution: Resolution::Source }
+        Self {
+            quality: Quality::Medium,
+            resolution: Resolution::Source,
+            has_audio: true,
+        }
     }
 }
 
@@ -104,24 +109,32 @@ pub fn export(
         Some(h) => format!(",scale=-2:{h}"),
         None => String::new(),
     };
-    let filter_complex = format!(
-        "[0:v]select='{sel}',setpts=N/FRAME_RATE/TB{scale}[v];[0:a]aselect='{sel}',asetpts=N/SR/TB[a]",
-        sel = select,
-        scale = scale_chain
-    );
+    let filter_complex = build_filter_complex(&select, &scale_chain, options.has_audio);
 
     let crf = options.quality.crf().to_string();
-    let abr = options.quality.audio_bitrate();
 
     let mut cmd = Command::new(ffmpeg);
-    cmd.args(["-y", "-hide_banner", "-nostats", "-progress", "pipe:2", "-loglevel", "error"])
-        .arg("-i")
-        .arg(source)
-        .args(["-filter_complex", &filter_complex])
-        .args(["-map", "[v]", "-map", "[a]"])
-        .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf])
-        .args(["-c:a", "aac", "-b:a", abr])
-        .arg(output);
+    cmd.args([
+        "-y",
+        "-hide_banner",
+        "-nostats",
+        "-progress",
+        "pipe:2",
+        "-loglevel",
+        "error",
+    ])
+    .arg("-i")
+    .arg(source)
+    .args(["-filter_complex", &filter_complex])
+    .args(["-map", "[v]"])
+    .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf]);
+    if options.has_audio {
+        cmd.args(["-map", "[a]"])
+            .args(["-c:a", "aac", "-b:a", options.quality.audio_bitrate()]);
+    } else {
+        cmd.arg("-an");
+    }
+    cmd.arg(output);
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().context("spawning ffmpeg for export")?;
@@ -151,7 +164,10 @@ pub fn export(
                     let pct = ((seconds / kept_total) * 100.0).clamp(0.0, 99.0);
                     let msg = format!("encoded {:.2}s of {:.2}s kept", seconds, kept_total);
                     let mut cb = on_progress.lock().unwrap();
-                    cb(ExportProgress { pct: pct as f32, message: msg });
+                    cb(ExportProgress {
+                        pct: pct as f32,
+                        message: msg,
+                    });
                 }
                 continue;
             }
@@ -210,6 +226,19 @@ fn build_select_expr(cutlist: &CutList) -> String {
     }
 }
 
+fn build_filter_complex(select: &str, scale_chain: &str, has_audio: bool) -> String {
+    let video_filter = format!(
+        "[0:v]select='{sel}',setpts=N/FRAME_RATE/TB{scale}[v]",
+        sel = select,
+        scale = scale_chain
+    );
+    if has_audio {
+        format!("{video_filter};[0:a]aselect='{select}',asetpts=N/SR/TB[a]")
+    } else {
+        video_filter
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,9 +249,21 @@ mod tests {
         let cl = CutList {
             source_duration: 10.0,
             intervals: vec![
-                Cut { start: 0.0, end: 1.0, kind: CutKind::Keep },
-                Cut { start: 1.0, end: 2.0, kind: CutKind::Remove },
-                Cut { start: 2.0, end: 3.5, kind: CutKind::Keep },
+                Cut {
+                    start: 0.0,
+                    end: 1.0,
+                    kind: CutKind::Keep,
+                },
+                Cut {
+                    start: 1.0,
+                    end: 2.0,
+                    kind: CutKind::Remove,
+                },
+                Cut {
+                    start: 2.0,
+                    end: 3.5,
+                    kind: CutKind::Keep,
+                },
             ],
         };
         let s = build_select_expr(&cl);
@@ -233,7 +274,25 @@ mod tests {
 
     #[test]
     fn select_expr_empty_when_no_keeps() {
-        let cl = CutList { source_duration: 5.0, intervals: vec![] };
+        let cl = CutList {
+            source_duration: 5.0,
+            intervals: vec![],
+        };
         assert_eq!(build_select_expr(&cl), "0");
+    }
+
+    #[test]
+    fn filter_complex_omits_audio_when_source_has_no_audio() {
+        let filter = build_filter_complex("between(t,0.000000,1.000000)", "", false);
+        assert!(filter.contains("[0:v]select="));
+        assert!(!filter.contains("[0:a]"), "{filter}");
+        assert!(!filter.contains("[a]"), "{filter}");
+    }
+
+    #[test]
+    fn filter_complex_includes_audio_when_source_has_audio() {
+        let filter = build_filter_complex("between(t,0.000000,1.000000)", "", true);
+        assert!(filter.contains("[0:a]aselect="), "{filter}");
+        assert!(filter.ends_with("[a]"), "{filter}");
     }
 }

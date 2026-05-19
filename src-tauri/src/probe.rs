@@ -15,6 +15,7 @@ pub struct VideoInfo {
     pub fps: f64,
     pub width: u32,
     pub height: u32,
+    pub has_audio: bool,
     /// SMPTE timecode embedded in the source, when present
     /// (e.g. `15:33:27;24`). Used for FCPXML source-TC alignment.
     pub start_timecode: Option<String>,
@@ -49,8 +50,8 @@ pub fn probe(ffprobe: &Path, video: &Path) -> Result<VideoInfo> {
         ));
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .context("parsing ffprobe json output")?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("parsing ffprobe json output")?;
 
     let streams = json
         .get("streams")
@@ -61,6 +62,9 @@ pub fn probe(ffprobe: &Path, video: &Path) -> Result<VideoInfo> {
         .iter()
         .find(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("video"))
         .ok_or_else(|| anyhow!("no video stream in {}", video.display()))?;
+    let has_audio = streams
+        .iter()
+        .any(|s| s.get("codec_type").and_then(|c| c.as_str()) == Some("audio"));
 
     let width = video_stream
         .get("width")
@@ -114,6 +118,7 @@ pub fn probe(ffprobe: &Path, video: &Path) -> Result<VideoInfo> {
         fps,
         width,
         height,
+        has_audio,
         start_timecode,
     })
 }

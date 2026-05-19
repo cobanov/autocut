@@ -292,6 +292,8 @@ pub struct ExportMp4Args {
     pub quality: ExportQuality,
     #[serde(default = "default_resolution")]
     pub resolution: ExportResolution,
+    #[serde(default = "default_has_audio")]
+    pub has_audio: bool,
 }
 
 fn default_quality() -> ExportQuality {
@@ -299,6 +301,9 @@ fn default_quality() -> ExportQuality {
 }
 fn default_resolution() -> ExportResolution {
     ExportResolution::Source
+}
+fn default_has_audio() -> bool {
+    true
 }
 
 impl From<ExportQuality> for export_mp4::Quality {
@@ -346,6 +351,7 @@ pub async fn export_mp4(
     let options = export_mp4::ExportOptions {
         quality: args.quality.into(),
         resolution: args.resolution.into(),
+        has_audio: args.has_audio,
     };
     thread::spawn(move || {
         let on_progress = move |p: export_mp4::ExportProgress| {
@@ -404,6 +410,8 @@ pub struct ExportFcpxmlArgs {
     pub fps: f64,
     pub start_timecode: Option<String>,
     pub title: String,
+    #[serde(default = "default_has_audio")]
+    pub has_audio: bool,
 }
 
 /// Reveal a file in the OS file manager. macOS opens Finder with the file
@@ -451,6 +459,7 @@ pub fn export_fcpxml(args: ExportFcpxmlArgs) -> Result<(), String> {
             asset_path: Some(asset_path),
             start_timecode: args.start_timecode.as_deref(),
             title: &args.title,
+            has_audio: args.has_audio,
         },
     );
     std::fs::write(&args.output, xml).map_err(fmt_err)?;

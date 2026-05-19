@@ -334,7 +334,13 @@ class EditorStore {
         }
       });
       if (!this.isCurrentVideo(sessionId, source)) return;
-      await apiExportMp4(source, outputPath, normalized, this.exportOptions);
+      await apiExportMp4(
+        source,
+        outputPath,
+        normalized,
+        this.exportOptions,
+        this.video.has_audio,
+      );
       if (!this.isCurrentVideo(sessionId, source)) return;
       this.exportProgress = { pct: 100, message: "done" };
       this.lastExport = { path: outputPath, format: "mp4" };
@@ -367,6 +373,7 @@ class EditorStore {
         this.video.fps,
         this.video.start_timecode,
         title,
+        this.video.has_audio,
       );
       if (!this.isCurrentVideo(sessionId, source)) return;
       this.lastExport = { path: outputPath, format: "fcpxml" };

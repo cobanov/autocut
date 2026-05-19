@@ -7,21 +7,6 @@
     "core:default",
     "dialog:default",
     "notification:default",
-    "shell:allow-open",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/ffmpeg",
-          "sidecar": true,
-          "args": true
-        },
-        {
-          "name": "binaries/ffprobe",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    }
+    "shell:allow-open"
   ]
 }

@@ -28,6 +28,14 @@ pub fn extract_waveform_with_cancel(
     } else {
         extract_pcm(ffmpeg, video, None)?
     };
+    waveform_from_samples(&samples, target_bins, cancel.as_deref())
+}
+
+pub fn waveform_from_samples(
+    samples: &[f32],
+    target_bins: usize,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<f32>> {
     if samples.is_empty() || target_bins == 0 {
         return Ok(Vec::new());
     }
@@ -35,7 +43,7 @@ pub fn extract_waveform_with_cancel(
     let bin_size = (samples.len() as f64 / bins as f64).max(1.0);
     let mut out = Vec::with_capacity(bins);
     for i in 0..bins {
-        if i % 512 == 0 && is_cancelled(cancel.as_deref()) {
+        if i % 512 == 0 && is_cancelled(cancel) {
             return Err(anyhow!("waveform extraction cancelled"));
         }
         let start = (i as f64 * bin_size) as usize;

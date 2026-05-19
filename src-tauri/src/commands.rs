@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -19,7 +20,7 @@ use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams};
 use crate::export_mp4;
 use crate::probe::{probe, VideoInfo};
 use crate::vad::{detect_with_cancel as detect_vad_with_cancel, VadParams};
-use crate::waveform::extract_waveform_with_cancel;
+use crate::waveform::waveform_from_samples;
 
 /// Render an anyhow::Error including the full chain of `with_context`
 /// messages. Plain `.to_string()` would only show the outermost message,
@@ -36,6 +37,73 @@ pub struct AppState {
     pub export_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub detect_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pub pcm_cache: Arc<PcmCache>,
+}
+
+#[derive(Default)]
+pub struct PcmCache {
+    inner: Mutex<Option<CachedPcm>>,
+}
+
+struct CachedPcm {
+    key: PcmCacheKey,
+    samples: Arc<Vec<f32>>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct PcmCacheKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl PcmCacheKey {
+    fn from_path(path: &Path) -> Result<Self, String> {
+        let meta = std::fs::metadata(path).map_err(fmt_err)?;
+        Ok(Self {
+            path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
+            modified: meta.modified().ok(),
+            len: meta.len(),
+        })
+    }
+}
+
+impl PcmCache {
+    fn get_or_extract(
+        &self,
+        ffmpeg: &Path,
+        video: &Path,
+        range: Option<(f64, f64)>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Arc<Vec<f32>>, String> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("audio extraction cancelled".to_string());
+        }
+        if range.is_some() {
+            return extract_pcm_with_cancel(ffmpeg, video, range, Some(cancel))
+                .map(Arc::new)
+                .map_err(fmt_err);
+        }
+
+        let key = PcmCacheKey::from_path(video)?;
+        let mut guard = self.inner.lock().unwrap();
+        if cancel.load(Ordering::SeqCst) {
+            return Err("audio extraction cancelled".to_string());
+        }
+        if let Some(entry) = guard.as_ref() {
+            if entry.key == key {
+                return Ok(entry.samples.clone());
+            }
+        }
+
+        let samples =
+            Arc::new(extract_pcm_with_cancel(ffmpeg, video, None, Some(cancel)).map_err(fmt_err)?);
+        *guard = Some(CachedPcm {
+            key,
+            samples: samples.clone(),
+        });
+        Ok(samples)
+    }
 }
 
 fn install_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) -> Arc<AtomicBool> {
@@ -103,8 +171,15 @@ pub async fn compute_waveform(
     let video = PathBuf::from(&path);
     let cancel = install_cancel_slot(&state.waveform_cancel);
     let cancel_for_worker = cancel.clone();
+    let pcm_cache = state.pcm_cache.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        extract_waveform_with_cancel(&ffmpeg, &video, target_bins, Some(cancel_for_worker))
+        let samples = pcm_cache.get_or_extract(&ffmpeg, &video, None, cancel_for_worker.clone())?;
+        waveform_from_samples(
+            samples.as_slice(),
+            target_bins,
+            Some(cancel_for_worker.as_ref()),
+        )
+        .map_err(fmt_err)
     })
     .await;
     clear_cancel_slot(&state.waveform_cancel, &cancel);
@@ -167,13 +242,13 @@ pub async fn detect_silence(
     let offset = range.map(|(s, _)| s).unwrap_or(0.0);
     let cancel = install_cancel_slot(&state.detect_cancel);
     let cancel_for_worker = cancel.clone();
+    let pcm_cache = state.pcm_cache.clone();
 
     let joined = tauri::async_runtime::spawn_blocking(move || -> Result<DetectResult, String> {
         let samples =
-            extract_pcm_with_cancel(&ffmpeg, &video, range, Some(cancel_for_worker.clone()))
-                .map_err(fmt_err)?;
+            pcm_cache.get_or_extract(&ffmpeg, &video, range, cancel_for_worker.clone())?;
         let segments = detect_vad_with_cancel(
-            &samples,
+            samples.as_slice(),
             vad_params,
             offset,
             Some(cancel_for_worker.as_ref()),

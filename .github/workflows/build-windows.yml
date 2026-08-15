@@ -13,9 +13,10 @@ jobs:
         with:
           version: 11
 
+      # pnpm 11 uses node:sqlite and refuses to start on anything below 22.13.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install Rust toolchain

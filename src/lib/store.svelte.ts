@@ -201,6 +201,10 @@ class EditorStore {
   }
 
   private async fetchWaveform(path: string, sessionId: number) {
+    // Asking ffmpeg to extract audio from a silent file fails outright rather
+    // than returning nothing, so there is no waveform to draw and no error
+    // worth surfacing either.
+    if (!this.video?.has_audio) return;
     try {
       // Scale bin count with duration so very long clips still have enough
       // detail when zoomed in 50x-100x via the navigator. A flat 2000-bin
@@ -284,6 +288,15 @@ class EditorStore {
     // always describes project time — hence the reference's duration here and
     // the source's own offset passed through to shift the segments.
     const source = this.detectSource();
+    if (!source) {
+      // ffmpeg's own complaint here is "Output file does not contain any
+      // stream", which tells the user nothing about what they did or what to
+      // do next. Catch it before it gets that far.
+      this.detectError = this.linkedTracks.length
+        ? "nothing in this project has an audio track, so there are no silences to find"
+        : "this video has no audio track, so there are no silences to find — add a separate audio recording under linked tracks if you have one";
+      return false;
+    }
     this.jobStatus = "detecting";
     this.detectError = null;
     try {
@@ -437,13 +450,15 @@ class EditorStore {
   // ---- linked tracks ----
 
   /// Media detection listens to, plus where that media sits in project time.
-  /// Falls back to the reference whenever the chosen track has gone away.
-  detectSource(): { path: string; offset: number } {
+  /// Falls back to the reference whenever the chosen track has gone away, and
+  /// is null when nothing in the project carries audio at all.
+  detectSource(): { path: string; offset: number } | null {
     const chosen = this.linkedTracks.find(
       (t) => t.info.path === this.detectSourcePath,
     );
     if (chosen) return { path: chosen.info.path, offset: chosen.offset };
-    return { path: this.video?.path ?? "", offset: 0 };
+    if (this.video?.has_audio) return { path: this.video.path, offset: 0 };
+    return null;
   }
 
   /// Every track that could plausibly be detected on: the reference plus any

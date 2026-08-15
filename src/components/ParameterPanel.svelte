@@ -13,6 +13,8 @@
   // the reference is the only thing that could be listened to.
   let candidates = $derived(editor.detectCandidates());
   let activeSource = $derived(editor.detectSourcePath ?? editor.video?.path ?? "");
+  /// Nothing loaded carries sound, so there is nothing to analyse.
+  let silent = $derived(editor.video !== null && editor.detectSource() === null);
 </script>
 
 <section class="card">
@@ -54,16 +56,26 @@
     <button
       class="btn btn-primary btn-block btn-lg"
       onclick={() => editor.runDetectNow()}
-      disabled={busy}
+      disabled={busy || silent}
+      title={silent ? "This video has no audio track" : undefined}
     >
       {#if editor.jobStatus === "detecting"}
         analyzing…
+      {:else if silent}
+        no audio
       {:else if hasCutlist}
         re-detect
       {:else}
         detect silences
       {/if}
     </button>
+
+    {#if silent}
+      <p class="tip mono muted-2 silent-note">
+        this file has no sound. add a separate audio recording under
+        <span class="kbd">linked tracks</span> to detect against.
+      </p>
+    {/if}
 
     {#if editor.detectError}
       <div class="error">
@@ -176,6 +188,10 @@
     margin: 2px 0 0;
     color: var(--muted-2);
     letter-spacing: 0.02em;
+  }
+  .silent-note {
+    margin-top: 10px;
+    text-align: center;
   }
   .kbd {
     display: inline-block;

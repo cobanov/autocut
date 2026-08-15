@@ -1,10 +1,10 @@
 <script lang="ts">
+  import { clampKeepEdge } from "../lib/cuts";
   import { editor } from "../lib/store.svelte";
 
   let keeps = $derived(editor.keepIntervals());
   let duration = $derived(editor.video?.duration ?? 0);
   let disabledCount = $derived(keeps.filter((k) => k.disabled).length);
-  const MIN_KEEP_SECONDS = 0.05;
 
   // Width-based responsive collapse driven by ResizeObserver. Container
   // queries should do this for free, but Chromium webviews evaluate them
@@ -43,21 +43,27 @@
     return s.toFixed(2);
   }
 
-  function commitStart(i: number, value: number) {
-    if (!Number.isFinite(value)) return;
+  /// Commit an edited in/out field. The typed value is clamped against the
+  /// neighbouring keeps — without that, typing a value that overlaps a
+  /// neighbour fuses the two cuts and renumbers every row below.
+  ///
+  /// We write the resolved number back into the element rather than trusting
+  /// the reactive re-render: when the clamp lands on the value the keep
+  /// already had, the bound expression doesn't change, so Svelte has no reason
+  /// to repaint and the field would keep showing what the user typed.
+  function commitEdge(i: number, edge: "in" | "out", el: HTMLInputElement) {
     const k = keeps[i];
     if (!k) return;
-    const maxStart = Math.max(0, k.end - MIN_KEEP_SECONDS);
-    const next = Math.max(0, Math.min(maxStart, value));
-    editor.updateKeep(i, next, k.end);
-  }
-  function commitEnd(i: number, value: number) {
-    if (!Number.isFinite(value)) return;
-    const k = keeps[i];
-    if (!k) return;
-    const minEnd = Math.min(duration, k.start + MIN_KEEP_SECONDS);
-    const next = Math.min(duration, Math.max(minEnd, value));
-    editor.updateKeep(i, k.start, next);
+    const own = edge === "in" ? k.start : k.end;
+    const value = el.valueAsNumber;
+    if (!Number.isFinite(value)) {
+      el.value = fmt(own);
+      return;
+    }
+    const next = clampKeepEdge(keeps, i, edge, value, duration);
+    el.value = fmt(next);
+    if (edge === "in") editor.updateKeep(i, next, k.end);
+    else editor.updateKeep(i, k.start, next);
   }
   function addAtPlayhead() {
     const t = editor.currentTime;
@@ -134,8 +140,7 @@
               max={duration}
               value={fmt(k.start)}
               aria-label="In point seconds"
-              onchange={(e) =>
-                commitStart(i, (e.currentTarget as HTMLInputElement).valueAsNumber)}
+              onchange={(e) => commitEdge(i, "in", e.currentTarget)}
             />
             <span class="arrow">→</span>
             <input
@@ -145,8 +150,7 @@
               max={duration}
               value={fmt(k.end)}
               aria-label="Out point seconds"
-              onchange={(e) =>
-                commitEnd(i, (e.currentTarget as HTMLInputElement).valueAsNumber)}
+              onchange={(e) => commitEdge(i, "out", e.currentTarget)}
             />
           </div>
 

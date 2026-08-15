@@ -1,10 +1,10 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { clampKeepEdge } from "../lib/cuts";
   import { editor } from "../lib/store.svelte";
 
   const MIN_VIEW_SPAN = 1.5;
   const HANDLE_FRACTION = 0.15;
-  const MIN_KEEP_SECONDS = 0.05;
 
   let barEl: HTMLDivElement | null = $state(null);
   let navEl: HTMLDivElement | null = $state(null);
@@ -247,25 +247,28 @@
   function startEdgeDrag(e: PointerEvent, keepIndex: number, kind: EdgeDragKind) {
     e.preventDefault();
     e.stopPropagation();
-    const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
+    // Snapshot the keeps once for the whole gesture. `updateKeep` rewrites the
+    // cutlist on every move, so re-reading it per frame would let the clamp
+    // bounds drift under the pointer. Neighbours can't move during a single
+    // edge drag, so the snapshot stays valid.
+    //
+    // No setPointerCapture here: the move/up listeners live on `window`, which
+    // already survives the pointer leaving the element or the window entirely.
     const keeps = editor.keepIntervals();
-    const prevEnd = keepIndex > 0 ? keeps[keepIndex - 1].end : 0;
-    const nextStart =
-      keepIndex < keeps.length - 1 ? keeps[keepIndex + 1].start : duration;
     const own = keeps[keepIndex];
+    if (!own) return;
 
     const onMove = (ev: PointerEvent) => {
-      const t = pxToTime(ev.clientX);
-      if (kind === "in") {
-        const next = Math.max(prevEnd, Math.min(own.end - MIN_KEEP_SECONDS, t));
-        editor.updateKeep(keepIndex, next, own.end);
-        dragHint = { x: ev.clientX, t: next, label: "in" };
-      } else {
-        const next = Math.min(nextStart, Math.max(own.start + MIN_KEEP_SECONDS, t));
-        editor.updateKeep(keepIndex, own.start, next);
-        dragHint = { x: ev.clientX, t: next, label: "out" };
-      }
+      const next = clampKeepEdge(
+        keeps,
+        keepIndex,
+        kind,
+        pxToTime(ev.clientX),
+        duration,
+      );
+      if (kind === "in") editor.updateKeep(keepIndex, next, own.end);
+      else editor.updateKeep(keepIndex, own.start, next);
+      dragHint = { x: ev.clientX, t: next, label: kind };
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -283,8 +286,15 @@
   let intervals = $derived(editor.cutlist?.intervals ?? []);
   let segWithKeepIndex = $derived.by(() => {
     let k = 0;
-    return intervals.map((c) => ({
+    return intervals.map((c, i) => ({
       cut: c,
+      // Position in the cutlist, used as the {#each} key. Keying on the
+      // interval's own start/end instead made every edge-drag frame produce a
+      // fresh key, so Svelte tore down and rebuilt the segment and both of its
+      // handle elements ~60 times a second for the length of the gesture.
+      // The index is stable across an edge drag because dragging an edge only
+      // resizes intervals, it doesn't add or remove them.
+      id: i,
       keepIndex: c.kind === "keep" ? k++ : -1,
     }));
   });
@@ -468,7 +478,7 @@
             <path d={wavePath} />
           </svg>
         {/if}
-        {#each visibleSegments as s (s.cut.start + "-" + s.cut.end + "-" + s.cut.kind)}
+        {#each visibleSegments as s (s.id)}
           {@const c = s.cut}
           {@const isKeep = c.kind === "keep"}
           {@const isDisabled = isKeep && c.disabled === true}
@@ -534,7 +544,7 @@
             <path d={navWavePath} />
           </svg>
         {/if}
-        {#each intervals as c (c.start + "n-" + c.end)}
+        {#each intervals as c, i (i)}
           <div
             class="nav-seg {c.kind}"
             class:disabled={c.kind === "keep" && c.disabled === true}

@@ -14,13 +14,15 @@ import {
   onExportProgress,
   openVideo,
 } from "./api";
-import type {
-  Cut,
-  CutList,
-  DetectParams,
-  ExportOptions,
-  VideoInfo,
-} from "./types";
+import {
+  nextKeepTarget,
+  normalizeKeeps,
+  previousKeepTarget,
+  resolveForExport,
+  tileCutList,
+  type KeepInput,
+} from "./cuts";
+import type { CutList, DetectParams, ExportOptions, VideoInfo } from "./types";
 
 type JobStatus = "idle" | "detecting" | "exporting";
 
@@ -204,49 +206,18 @@ class EditorStore {
   /// Jump to the previous keep interval's start. If we're more than ~1s into
   /// the current keep, restart it instead (standard media-player behavior).
   prevKeep() {
-    const keeps = this.keepIntervals();
-    if (!keeps.length) return;
-    const t = this.currentTime;
-    const current = keeps.findIndex((k) => t >= k.start && t < k.end);
-    if (current >= 0) {
-      if (t - keeps[current].start > 1.0) {
-        this.requestSeek(keeps[current].start);
-      } else if (current > 0) {
-        this.requestSeek(keeps[current - 1].start);
-      } else {
-        this.requestSeek(keeps[current].start);
-      }
-      return;
-    }
-
-    let previous = -1;
-    for (let i = 0; i < keeps.length; i++) {
-      if (keeps[i].end <= t) previous = i;
-      else break;
-    }
-    if (previous === -1) {
-      this.requestSeek(keeps[0].start);
-      return;
-    }
-    this.requestSeek(keeps[previous].start);
+    const target = previousKeepTarget(this.keepIntervals(), this.currentTime);
+    if (target !== null) this.requestSeek(target);
   }
 
   nextKeep() {
-    const keeps = this.keepIntervals();
-    if (!keeps.length) return;
-    const t = this.currentTime;
-    const current = keeps.find((k) => t >= k.start && t < k.end);
-    for (const k of keeps) {
-      if (k.start > t + 0.05) {
-        this.requestSeek(k.start);
-        return;
-      }
-    }
-    if (current) {
-      this.requestSeek(current.end);
-    } else if (this.video) {
-      this.requestSeek(this.video.duration);
-    }
+    if (!this.video) return;
+    const target = nextKeepTarget(
+      this.keepIntervals(),
+      this.currentTime,
+      this.video.duration,
+    );
+    if (target !== null) this.requestSeek(target);
   }
 
   // Debounced rerun. Parameter sliders call scheduleDetect() on every change.
@@ -365,6 +336,10 @@ class EditorStore {
     const source = this.video.path;
     this.lastExport = null;
     this.exportError = null;
+    // FCPXML is a fast synchronous write, but it still has to hold the
+    // "exporting" status: without it the buttons stay live and a double click
+    // races two writes at the same output path.
+    this.jobStatus = "exporting";
     try {
       await apiExportFcpxml(
         source,
@@ -381,6 +356,10 @@ class EditorStore {
     } catch (err) {
       if (this.isCurrentVideo(sessionId, source)) {
         this.exportError = String(err);
+      }
+    } finally {
+      if (this.isCurrentVideo(sessionId, source)) {
+        this.jobStatus = "idle";
       }
     }
   }
@@ -440,51 +419,11 @@ class EditorStore {
   /// intervals. Gaps become "remove" intervals; the result tiles [0,duration].
   /// Each keep can carry a `disabled` flag that persists through edits and
   /// only resolves to a real `remove` during export normalization.
-  setKeepIntervals(
-    keeps: { start: number; end: number; disabled?: boolean }[],
-  ) {
+  /// The interval algebra itself lives in ./cuts so it can be unit tested.
+  setKeepIntervals(keeps: KeepInput[]) {
     if (!this.video) return;
     const dur = this.video.duration;
-    const clipped = keeps
-      .map((k) => ({
-        start: Math.max(0, Math.min(dur, k.start)),
-        end: Math.max(0, Math.min(dur, k.end)),
-        disabled: !!k.disabled,
-      }))
-      .filter((k) => k.end - k.start > 0.01)
-      .sort((a, b) => a.start - b.start);
-
-    const merged: { start: number; end: number; disabled: boolean }[] = [];
-    for (const k of clipped) {
-      const last = merged[merged.length - 1];
-      if (last && k.start <= last.end) {
-        last.end = Math.max(last.end, k.end);
-        // When an active keep overlaps a disabled keep, active content wins.
-        // Otherwise a tiny drag overlap can silently remove good footage.
-        last.disabled = last.disabled && k.disabled;
-      } else {
-        merged.push({ ...k });
-      }
-    }
-
-    const intervals: Cut[] = [];
-    let cursor = 0;
-    for (const k of merged) {
-      if (k.start > cursor) {
-        intervals.push({ start: cursor, end: k.start, kind: "remove" });
-      }
-      intervals.push({
-        start: k.start,
-        end: k.end,
-        kind: "keep",
-        ...(k.disabled ? { disabled: true } : {}),
-      });
-      cursor = k.end;
-    }
-    if (cursor < dur) {
-      intervals.push({ start: cursor, end: dur, kind: "remove" });
-    }
-    this.cutlist = { source_duration: dur, intervals };
+    this.cutlist = tileCutList(normalizeKeeps(keeps, dur), dur);
   }
 
   keepIntervals(): { start: number; end: number; disabled: boolean }[] {
@@ -525,25 +464,7 @@ class EditorStore {
   /// or truly removed. Called by exportMp4 / exportFcpxml.
   private normalizedCutlist(): CutList | null {
     if (!this.cutlist) return null;
-    const out: Cut[] = [];
-    for (const c of this.cutlist.intervals) {
-      const next: Cut =
-        c.disabled && c.kind === "keep"
-          ? { start: c.start, end: c.end, kind: "remove" }
-          : { start: c.start, end: c.end, kind: c.kind };
-      const last = out[out.length - 1];
-      if (
-        last &&
-        last.kind === "remove" &&
-        next.kind === "remove" &&
-        Math.abs(last.end - next.start) < 1e-6
-      ) {
-        last.end = next.end;
-      } else {
-        out.push(next);
-      }
-    }
-    return { source_duration: this.cutlist.source_duration, intervals: out };
+    return resolveForExport(this.cutlist);
   }
 }
 

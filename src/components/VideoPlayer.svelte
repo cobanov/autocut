@@ -1,8 +1,18 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
+  import { omittedIntervals, skipTargetFor, type OmittedInterval } from "../lib/cuts";
   import { editor } from "../lib/store.svelte";
 
   let videoEl: HTMLVideoElement | null = $state(null);
+
+  // Recomputed when the cutlist changes, not per frame. Deliberately a plain
+  // `let` rather than $state/$derived: the frame loop below reads it from an
+  // async callback, and making it reactive would put the whole listener setup
+  // effect on a teardown/rebuild cycle every time a cut moves.
+  let omitted: OmittedInterval[] = [];
+  $effect(() => {
+    omitted = editor.cutlist ? omittedIntervals(editor.cutlist) : [];
+  });
 
   let path = $derived(editor.pendingPath ?? editor.video?.path ?? null);
   let src = $derived(path ? convertFileSrc(path) : null);
@@ -105,25 +115,16 @@
       const t = v.currentTime;
       editor.currentTime = t;
       const isPlaying = !v.paused && !v.ended;
-      if (editor.skipRemoved && editor.cutlist) {
-        const intervals = editor.cutlist.intervals;
-        for (let i = 0; i < intervals.length; i++) {
-          const c = intervals[i];
-          const isOmitted = c.kind === "remove" || (c.kind === "keep" && c.disabled);
-          if (!isOmitted) continue;
-          // Already inside an omitted interval: jump out immediately.
-          if (t >= c.start && t < c.end - 0.005) {
-            performSkip(c.end);
-            break;
-          }
-          // Approaching an omitted interval from the kept side: skip a few
-          // frames before we'd cross the boundary so the user never sees
-          // the dead frame.
-          if (isPlaying && t < c.start && c.start - t < SKIP_LOOKAHEAD) {
-            performSkip(c.end);
-            break;
-          }
-        }
+      if (editor.skipRemoved) {
+        // Pre-roll only applies while rolling. A paused playhead parked inside
+        // a removed region (from a manual seek) still escapes it, but a paused
+        // playhead near one must not jump ahead on its own.
+        const target = skipTargetFor(
+          omitted,
+          t,
+          isPlaying ? SKIP_LOOKAHEAD : 0,
+        );
+        if (target !== null) performSkip(target);
       }
       if (isPlaying) schedule();
     }

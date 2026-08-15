@@ -140,6 +140,8 @@ cd src-tauri
 AUTOCUT_STUB_SIDECARS=1 cargo test --lib     # no download, no frontend build
 cargo clippy --all-targets
 cargo fmt --check
+
+cargo run --example smoke -- clip.mp4         # probe + VAD on one file
 ```
 
 `AUTOCUT_STUB_SIDECARS=1` drops empty placeholders where the ffmpeg

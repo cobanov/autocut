@@ -1,7 +1,12 @@
 //! Tiny smoke harness used during development. Probes a video, runs VAD on it,
 //! and prints the resulting speech segments and cutlist summary.
 //!
-//! Run: `cargo run --bin smoke -- /path/to/video.mp4 [pad_seconds]`
+//! Run: `cargo run --example smoke -- /path/to/video.mp4 [pad_seconds]`
+//!
+//! An example rather than a bin on purpose: the Tauri bundler copies every
+//! binary target in the manifest into Contents/MacOS, so as a bin this shipped
+//! ~25MB of developer tooling inside the app every user downloads. Examples
+//! are still built by `cargo clippy --all-targets`, so it stays linted.
 
 use std::path::PathBuf;
 

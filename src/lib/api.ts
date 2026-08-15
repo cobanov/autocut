@@ -6,11 +6,28 @@ import type {
   DiagnosticInfo,
   ExportOptions,
   ExportProgressEvent,
-  VideoInfo,
+  LinkedTrack,
+  MediaInfo,
+  TrackProbe,
 } from "./types";
 
-export async function openVideo(path: string): Promise<VideoInfo> {
-  return invoke<VideoInfo>("open_video", { path });
+export async function openVideo(path: string): Promise<MediaInfo> {
+  return invoke<MediaInfo>("open_video", { path });
+}
+
+/// Probe a file to ride along as a linked track, and ask where it belongs.
+/// The reference's timecode and rate go along so the offset can be derived
+/// from embedded timecode when both sides have one.
+export async function openTrack(
+  path: string,
+  referenceTimecode: string | null,
+  fps: number,
+): Promise<TrackProbe> {
+  return invoke<TrackProbe>("open_track", {
+    path,
+    referenceTimecode,
+    fps,
+  });
 }
 
 export async function diagnosticInfo(): Promise<DiagnosticInfo> {
@@ -79,6 +96,7 @@ export async function exportFcpxml(
   startTimecode: string | null,
   title: string,
   hasAudio: boolean,
+  tracks: LinkedTrack[],
 ): Promise<void> {
   await invoke("export_fcpxml", {
     args: {
@@ -89,6 +107,15 @@ export async function exportFcpxml(
       start_timecode: startTimecode,
       title,
       has_audio: hasAudio,
+      tracks: tracks.map((t) => ({
+        source: t.info.path,
+        name: t.info.path.split(/[/\\]/).pop() ?? t.info.path,
+        duration: t.info.duration,
+        start_timecode: t.info.start_timecode,
+        has_video: t.info.has_video,
+        has_audio: t.info.has_audio,
+        offset: t.offset,
+      })),
     },
   });
 }

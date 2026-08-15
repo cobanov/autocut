@@ -11,6 +11,8 @@ sliders, export an MP4 or send the timeline to DaVinci Resolve / Premiere.
 - Lets you preview the cut version before exporting
 - Lets you fine-tune individual cuts (drag the edges on the timeline, or
   edit in/out timestamps in the cuts panel)
+- Cuts your **other camera angles and audio recordings at the same points**,
+  so a multi-track shoot comes out of autocut still in sync
 - Exports a ready-to-share **MP4** with the silence removed
 - Or exports an **FCPXML** that DaVinci Resolve and Adobe Premiere import
   as a clean timeline, source timecode preserved
@@ -79,6 +81,28 @@ the way.
      already on the timeline
 
 That's it.
+
+## Multi-track shoots
+
+Most edits aren't one clip. If you shot two cameras and recorded sound on a
+separate device, autocut cuts all of it together.
+
+1. Drop your **main camera** on the window as usual. That's the *reference* —
+   it's what you preview, and everything else lines up against it.
+2. In the **export** panel, hit **+ add** under *linked tracks* and pick the
+   other angles and audio files.
+3. If your files carry timecode, autocut lines them up from it and marks the
+   row `tc`. If they don't, it assumes everything started together and marks
+   the row `≈` — type the real offset in seconds if they didn't.
+4. Recorded clean sound separately? Use **listen to** in the detection panel
+   to point the analysis at that recording instead of the camera's scratch
+   audio. The cuts still apply to every track.
+5. Export **FCPXML**. Your main camera lands on V1, the other video tracks
+   above it, the audio tracks below — all cut at exactly the same points.
+
+MP4 export still writes a single file from the reference clip. A flat video
+has one picture and one mix, and choosing which angle is on top and how the
+audio balances is an edit, not a cut.
 
 ## Tips
 

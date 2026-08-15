@@ -28,6 +28,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::open_video,
+            commands::open_track,
             commands::compute_waveform,
             commands::detect_silence,
             commands::export_mp4,

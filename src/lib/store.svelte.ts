@@ -12,6 +12,7 @@ import {
   exportFcpxml as apiExportFcpxml,
   exportMp4 as apiExportMp4,
   onExportProgress,
+  openTrack,
   openVideo,
 } from "./api";
 import {
@@ -22,7 +23,13 @@ import {
   tileCutList,
   type KeepInput,
 } from "./cuts";
-import type { CutList, DetectParams, ExportOptions, VideoInfo } from "./types";
+import type {
+  CutList,
+  DetectParams,
+  ExportOptions,
+  LinkedTrack,
+  MediaInfo,
+} from "./types";
 
 type JobStatus = "idle" | "detecting" | "exporting";
 
@@ -51,14 +58,33 @@ const DEFAULTS: DetectParams = {
   min_silence_ms: 100,
   min_speech_ms: 150,
   pad: 0.3,
+  source_offset: 0,
 };
+
+let nextTrackId = 0;
 
 function isCancellationError(err: unknown): boolean {
   return /cancell?ed/i.test(String(err));
 }
 
+function basename(path: string): string {
+  return path.split(/[/\\]/).pop() ?? path;
+}
+
 class EditorStore {
-  video = $state<VideoInfo | null>(null);
+  /// The reference clip: what the player shows, what the mp4 export encodes,
+  /// and whose timeline defines project time. Everything else is positioned
+  /// relative to it.
+  video = $state<MediaInfo | null>(null);
+  /// Extra media cut at the same points as the reference. FCPXML only — an
+  /// mp4 is one picture and one mix, so there is nowhere for these to go in
+  /// it without compositing decisions autocut has no business making.
+  linkedTracks = $state<LinkedTrack[]>([]);
+  /// Path of the media detection listens to. Null means the reference. Points
+  /// at a linked track when the clean speech was recorded separately from the
+  /// picture, which is the normal case for double-system sound.
+  detectSourcePath = $state<string | null>(null);
+  trackError = $state<string | null>(null);
   /// Raw filesystem path of the just-dropped file. Set BEFORE ffprobe returns
   /// so the <video> element can start loading bytes in parallel with metadata.
   pendingPath = $state<string | null>(null);
@@ -137,6 +163,11 @@ class EditorStore {
     this.exportError = null;
     this.waveformError = null;
     this.detectQueued = false;
+    // A new reference means a new project: the old linked tracks were aligned
+    // against a timeline that no longer exists.
+    this.linkedTracks = [];
+    this.detectSourcePath = null;
+    this.trackError = null;
     this.cutlist = null;
     this.waveform = null;
     this.lastExport = null;
@@ -249,10 +280,17 @@ class EditorStore {
     const sessionId = this.sessionId;
     const path = this.video.path;
     const duration = this.video.duration;
+    // Detection may listen to a linked track, but the cutlist it produces
+    // always describes project time — hence the reference's duration here and
+    // the source's own offset passed through to shift the segments.
+    const source = this.detectSource();
     this.jobStatus = "detecting";
     this.detectError = null;
     try {
-      const res = await detectSilence(path, duration, { ...this.params });
+      const res = await detectSilence(source.path, duration, {
+        ...this.params,
+        source_offset: source.offset,
+      });
       if (!this.isCurrentVideo(sessionId, path)) return false;
       this.cutlist = res.cutlist;
       return true;
@@ -343,6 +381,7 @@ class EditorStore {
         this.video.start_timecode,
         title,
         this.video.has_audio,
+        this.linkedTracks,
       );
       if (!this.isCurrentVideo(sessionId, source)) return;
       this.lastExport = { path: outputPath, format: "fcpxml" };
@@ -368,6 +407,9 @@ class EditorStore {
     this.sessionId += 1;
     this.video = null;
     this.pendingPath = null;
+    this.linkedTracks = [];
+    this.detectSourcePath = null;
+    this.trackError = null;
     this.cutlist = null;
     this.waveform = null;
     this.loadError = null;
@@ -390,6 +432,105 @@ class EditorStore {
         /* best-effort: closing the project should not surface cancel errors */
       });
     }
+  }
+
+  // ---- linked tracks ----
+
+  /// Media detection listens to, plus where that media sits in project time.
+  /// Falls back to the reference whenever the chosen track has gone away.
+  detectSource(): { path: string; offset: number } {
+    const chosen = this.linkedTracks.find(
+      (t) => t.info.path === this.detectSourcePath,
+    );
+    if (chosen) return { path: chosen.info.path, offset: chosen.offset };
+    return { path: this.video?.path ?? "", offset: 0 };
+  }
+
+  /// Every track that could plausibly be detected on: the reference plus any
+  /// linked track carrying audio.
+  detectCandidates(): { path: string; label: string; isReference: boolean }[] {
+    const out: { path: string; label: string; isReference: boolean }[] = [];
+    if (this.video) {
+      out.push({
+        path: this.video.path,
+        label: basename(this.video.path),
+        isReference: true,
+      });
+    }
+    for (const t of this.linkedTracks) {
+      if (!t.info.has_audio) continue;
+      out.push({
+        path: t.info.path,
+        label: basename(t.info.path),
+        isReference: false,
+      });
+    }
+    return out;
+  }
+
+  async addTrack(path: string) {
+    if (!this.video) return;
+    if (
+      path === this.video.path ||
+      this.linkedTracks.some((t) => t.info.path === path)
+    ) {
+      this.trackError = `${basename(path)} is already in this project`;
+      return;
+    }
+    const sessionId = this.sessionId;
+    this.trackError = null;
+    try {
+      const probe = await openTrack(
+        path,
+        this.video.start_timecode,
+        this.video.fps,
+      );
+      if (this.sessionId !== sessionId) return;
+      this.linkedTracks = [
+        ...this.linkedTracks,
+        {
+          id: `track-${nextTrackId++}`,
+          info: probe.info,
+          offset: probe.offset,
+          offsetFromTimecode: probe.offset_from_timecode,
+        },
+      ];
+    } catch (err) {
+      if (this.sessionId === sessionId) this.trackError = String(err);
+    }
+  }
+
+  removeTrack(id: string) {
+    const gone = this.linkedTracks.find((t) => t.id === id);
+    this.linkedTracks = this.linkedTracks.filter((t) => t.id !== id);
+    // Detection was listening to the track that just left; fall back to the
+    // reference rather than silently analysing nothing.
+    if (gone && this.detectSourcePath === gone.info.path) {
+      this.detectSourcePath = null;
+      if (this.cutlist) void this.runDetectNow();
+    }
+  }
+
+  setTrackOffset(id: string, offset: number) {
+    if (!Number.isFinite(offset)) return;
+    this.linkedTracks = this.linkedTracks.map((t) =>
+      t.id === id ? { ...t, offset, offsetFromTimecode: false } : t,
+    );
+    // Moving the track detection listens to changes where its speech lands in
+    // project time, so the cutlist has to be rebuilt.
+    if (this.cutlist && this.detectSourcePath) {
+      const moved = this.linkedTracks.find((t) => t.id === id);
+      if (moved && moved.info.path === this.detectSourcePath) {
+        void this.runDetectNow();
+      }
+    }
+  }
+
+  setDetectSource(path: string | null) {
+    const next = path === this.video?.path ? null : path;
+    if (next === this.detectSourcePath) return;
+    this.detectSourcePath = next;
+    if (this.cutlist) void this.runDetectNow();
   }
 
   setHoveredKeep(i: number | null) {

@@ -1,8 +1,38 @@
 <script lang="ts">
-  import { save } from "@tauri-apps/plugin-dialog";
+  import { open, save } from "@tauri-apps/plugin-dialog";
   import { diagnosticInfo, revealInFinder } from "../lib/api";
   import { editor } from "../lib/store.svelte";
   import type { ExportQuality, ExportResolution } from "../lib/types";
+
+  async function addTrack() {
+    const picked = await open({
+      multiple: true,
+      directory: false,
+      filters: [
+        {
+          name: "Video or audio",
+          extensions: [
+            "mp4", "mov", "m4v", "mkv", "webm", "avi",
+            "wav", "aif", "aiff", "mp3", "m4a", "flac", "caf",
+          ],
+        },
+      ],
+    });
+    if (!picked) return;
+    for (const path of Array.isArray(picked) ? picked : [picked]) {
+      await editor.addTrack(path);
+    }
+  }
+
+  function commitOffset(id: string, el: HTMLInputElement) {
+    const value = el.valueAsNumber;
+    if (!Number.isFinite(value)) {
+      const current = editor.linkedTracks.find((t) => t.id === id);
+      el.value = (current?.offset ?? 0).toFixed(2);
+      return;
+    }
+    editor.setTrackOffset(id, value);
+  }
 
   function basename(p: string): string {
     return p.split(/[/\\]/).pop() ?? p;
@@ -150,6 +180,70 @@
       </div>
     </div>
 
+    <div class="opt">
+      <div class="opt-head">
+        <div class="opt-label">linked tracks</div>
+        <button class="btn btn-ghost btn-sm" onclick={addTrack} disabled={!editor.video}>
+          + add
+        </button>
+      </div>
+
+      {#if editor.linkedTracks.length === 0}
+        <p class="hint muted-2">
+          add the other camera angles and audio recordings from this shoot —
+          they get cut at exactly the same points and land on their own tracks
+          in the fcpxml.
+        </p>
+      {:else}
+        <div class="tracks">
+          {#each editor.linkedTracks as t (t.id)}
+            <div class="track">
+              <span class="track-kind mono" title={t.info.has_video ? "video" : "audio only"}>
+                {t.info.has_video ? "▣" : "♪"}
+              </span>
+              <span class="track-name mono" title={t.info.path}>
+                {basename(t.info.path)}
+              </span>
+              <label class="track-offset" title="Seconds from the start of the reference clip">
+                <input
+                  type="number"
+                  step="0.01"
+                  class="mono"
+                  value={t.offset.toFixed(2)}
+                  aria-label="Track offset in seconds"
+                  onchange={(e) => commitOffset(t.id, e.currentTarget)}
+                />
+                <span class="mono muted-2">s</span>
+              </label>
+              <span
+                class="track-src mono"
+                class:from-tc={t.offsetFromTimecode}
+                title={t.offsetFromTimecode
+                  ? "Aligned from embedded timecode"
+                  : "No timecode on both sides — assumed to start together. Correct it if the tracks drift."}
+              >{t.offsetFromTimecode ? "tc" : "≈"}</span>
+              <button
+                class="btn btn-ghost btn-sm track-remove"
+                onclick={() => editor.removeTrack(t.id)}
+                title="Remove this track"
+                aria-label="Remove track"
+              >×</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if editor.trackError}
+        <div class="error">
+          <div class="error-head">
+            <span class="dot dot-neg"></span>
+            <span class="mono error-title">couldn't add that track</span>
+          </div>
+          <pre class="error-body mono">{editor.trackError}</pre>
+        </div>
+      {/if}
+    </div>
+
     <div class="export-row">
       <button class="btn btn-primary" onclick={exportMp4} disabled={!canExport}>
         <span class="mono">▸</span> mp4
@@ -160,7 +254,11 @@
     </div>
 
     <p class="hint muted-2">
-      mp4 re-encodes via ffmpeg · fcpxml preserves source timecode for davinci & premiere
+      {#if editor.linkedTracks.length}
+        fcpxml carries all {editor.linkedTracks.length + 1} tracks · mp4 encodes the reference clip only
+      {:else}
+        mp4 re-encodes via ffmpeg · fcpxml preserves source timecode for davinci &amp; premiere
+      {/if}
     </p>
 
     {#if editor.jobStatus === "exporting" && editor.exportProgress}
@@ -244,6 +342,87 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--muted-2);
+  }
+  .opt-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .tracks {
+    display: grid;
+    gap: 4px;
+  }
+  .track {
+    display: grid;
+    grid-template-columns: 14px 1fr 62px 14px 22px;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+  }
+  .track-kind {
+    font-size: 11px;
+    color: var(--muted-2);
+    text-align: center;
+  }
+  .track-name {
+    font-size: 11px;
+    color: var(--foreground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .track-offset {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0 4px;
+    height: 22px;
+    min-width: 0;
+  }
+  .track-offset input {
+    background: transparent;
+    border: 0;
+    color: var(--foreground);
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-align: right;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  .track-offset input::-webkit-outer-spin-button,
+  .track-offset input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .track-offset span {
+    font-size: 9px;
+  }
+  /* "tc" means the offset came from embedded timecode and can be trusted;
+     "≈" means it was assumed and the user may need to nudge it. */
+  .track-src {
+    font-size: 9px;
+    text-align: center;
+    color: var(--muted-2);
+    cursor: help;
+  }
+  .track-src.from-tc {
+    color: var(--pos);
+  }
+  .track-remove {
+    width: 22px;
+    padding: 0;
   }
   .seg {
     display: grid;

@@ -8,6 +8,11 @@
 
   let hasCutlist = $derived(!!editor.cutlist);
   let busy = $derived(editor.jobStatus !== "idle");
+
+  // Only worth showing once there is a choice to make. With no linked audio
+  // the reference is the only thing that could be listened to.
+  let candidates = $derived(editor.detectCandidates());
+  let activeSource = $derived(editor.detectSourcePath ?? editor.video?.path ?? "");
 </script>
 
 <section class="card">
@@ -27,6 +32,25 @@
   </header>
 
   <div class="card-body">
+    {#if candidates.length > 1}
+      <div class="source">
+        <div class="source-label">listen to</div>
+        <select
+          class="mono"
+          value={activeSource}
+          disabled={busy}
+          onchange={(e) => editor.setDetectSource(e.currentTarget.value)}
+          title="Which recording the speech detection analyses. The cuts still apply to every track."
+        >
+          {#each candidates as c (c.path)}
+            <option value={c.path}>
+              {c.label}{c.isReference ? " (reference)" : ""}
+            </option>
+          {/each}
+        </select>
+      </div>
+    {/if}
+
     <button
       class="btn btn-primary btn-block btn-lg"
       onclick={() => editor.runDetectNow()}
@@ -109,6 +133,36 @@
     flex: 1;
     overflow-y: auto;
     min-height: 0;
+  }
+
+  .source {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 12px;
+  }
+  .source-label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+  }
+  .source select {
+    height: 28px;
+    width: 100%;
+    background: var(--input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--foreground);
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 0 6px;
+    cursor: pointer;
+  }
+  .source select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .fields {

@@ -16,10 +16,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::audio::extract_pcm_with_cancel;
 use crate::binaries::{ffmpeg_path, ffprobe_path};
 use crate::cutlist::CutList;
-use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams};
+use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams, Track};
 use crate::export_mp4;
-use crate::probe::{probe, VideoInfo};
+use crate::probe::{probe, MediaInfo};
 use crate::sync::lock;
+use crate::timecode::parse_smpte;
 use crate::vad::{score_chunks, segments_from_scores, VadParams};
 use crate::waveform::waveform_from_samples;
 
@@ -190,6 +191,11 @@ pub struct DetectParams {
     pub min_silence_ms: u32,
     pub min_speech_ms: u32,
     pub pad: f64,
+    /// Project-time second the analysed audio begins at. Non-zero when
+    /// detection runs on a linked track that rolled after the reference; the
+    /// resulting cutlist is always expressed in project time.
+    #[serde(default)]
+    pub source_offset: f64,
 }
 
 impl From<&DetectParams> for VadParams {
@@ -268,10 +274,60 @@ pub fn diagnostic_info(app: AppHandle) -> DiagnosticInfo {
 }
 
 #[tauri::command]
-pub async fn open_video(app: AppHandle, path: String) -> Result<VideoInfo, String> {
+pub async fn open_video(app: AppHandle, path: String) -> Result<MediaInfo, String> {
+    let info = open_media(app, path).await?;
+    // The reference clip is what the player shows and what the mp4 export
+    // encodes, so unlike a linked track it does have to carry picture.
+    if !info.has_video {
+        return Err(format!("no video stream in {}", info.path));
+    }
+    Ok(info)
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrackProbe {
+    pub info: MediaInfo,
+    pub offset: f64,
+    pub offset_from_timecode: bool,
+}
+
+/// Probe a file that will ride along as a linked track. Audio-only is fine
+/// here — a separate sound recorder's WAV is the whole point.
+///
+/// Also works out where the track belongs on the timeline. When both it and
+/// the reference carry embedded timecode, the same wall-clock instant is the
+/// one where their timecodes agree, so the track's media begins at project
+/// time `trackTC - referenceTC`. Without timecode on both sides there is
+/// nothing to derive it from, so it starts at zero for the user to correct.
+#[tauri::command]
+pub async fn open_track(
+    app: AppHandle,
+    path: String,
+    reference_timecode: Option<String>,
+    fps: f64,
+) -> Result<TrackProbe, String> {
+    let info = open_media(app, path).await?;
+    let (offset, offset_from_timecode) = match (
+        reference_timecode.as_deref(),
+        info.start_timecode.as_deref(),
+    ) {
+        (Some(reference), Some(track)) => (
+            parse_smpte(Some(track), fps) - parse_smpte(Some(reference), fps),
+            true,
+        ),
+        _ => (0.0, false),
+    };
+    Ok(TrackProbe {
+        info,
+        offset,
+        offset_from_timecode,
+    })
+}
+
+async fn open_media(app: AppHandle, path: String) -> Result<MediaInfo, String> {
     let ffprobe = ffprobe_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
-    let video = PathBuf::from(&path);
-    tauri::async_runtime::spawn_blocking(move || probe(&ffprobe, &video))
+    let media = PathBuf::from(&path);
+    tauri::async_runtime::spawn_blocking(move || probe(&ffprobe, &media))
         .await
         .map_err(fmt_err)?
         .map_err(fmt_err)
@@ -288,6 +344,7 @@ pub async fn detect_silence(
     let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
     let video = PathBuf::from(&path);
     let pad = params.pad;
+    let source_offset = params.source_offset;
     let vad_params: VadParams = (&params).into();
     let cancel = install_cancel_slot(&state.detect_cancel);
     let cancel_for_worker = cancel.clone();
@@ -298,7 +355,7 @@ pub async fn detect_silence(
         // every detect after the first is this cheap tail: re-segment the
         // probabilities under the new parameters and re-invert into a cutlist.
         let scores = cache.scores(&ffmpeg, &video, cancel_for_worker.clone())?;
-        let segments = segments_from_scores(&scores, vad_params, 0.0);
+        let segments = segments_from_scores(&scores, vad_params, source_offset);
         let cutlist = CutList::from_speech_segments(&segments, duration, pad);
         Ok(DetectResult { cutlist })
     })
@@ -455,6 +512,22 @@ pub struct ExportFcpxmlArgs {
     pub title: String,
     #[serde(default = "default_has_audio")]
     pub has_audio: bool,
+    /// Extra media cut in lockstep with the reference and emitted as
+    /// connected clips on their own lanes. Empty for a single-track export.
+    #[serde(default)]
+    pub tracks: Vec<TrackArgs>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrackArgs {
+    pub source: String,
+    pub name: String,
+    pub duration: f64,
+    pub start_timecode: Option<String>,
+    pub has_video: bool,
+    pub has_audio: bool,
+    /// Project-time second at which this track's media begins.
+    pub offset: f64,
 }
 
 /// Reveal a file in the OS file manager. macOS opens Finder with the file
@@ -494,15 +567,44 @@ pub fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn export_fcpxml(args: ExportFcpxmlArgs) -> Result<(), String> {
-    let asset_path = Path::new(&args.source);
+    let source = PathBuf::from(&args.source);
+    let reference = Track {
+        path: Some(&source),
+        name: &args.title,
+        duration: args.cutlist.source_duration,
+        start_timecode: args.start_timecode.as_deref(),
+        has_video: true,
+        has_audio: args.has_audio,
+        offset: 0.0,
+    };
+
+    let linked_paths: Vec<PathBuf> = args
+        .tracks
+        .iter()
+        .map(|t| PathBuf::from(&t.source))
+        .collect();
+    let linked: Vec<Track<'_>> = args
+        .tracks
+        .iter()
+        .zip(linked_paths.iter())
+        .map(|(t, path)| Track {
+            path: Some(path),
+            name: &t.name,
+            duration: t.duration,
+            start_timecode: t.start_timecode.as_deref(),
+            has_video: t.has_video,
+            has_audio: t.has_audio,
+            offset: t.offset,
+        })
+        .collect();
+
     let xml = render_fcpxml(
         &args.cutlist,
         FcpxmlParams {
             fps: args.fps,
-            asset_path: Some(asset_path),
-            start_timecode: args.start_timecode.as_deref(),
             title: &args.title,
-            has_audio: args.has_audio,
+            reference,
+            linked: &linked,
         },
     )
     .map_err(fmt_err)?;

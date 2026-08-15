@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{anyhow, Result};
 
 pub fn waveform_from_samples(
-    samples: &[f32],
+    samples: &[i16],
     target_bins: usize,
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<f32>> {
@@ -33,11 +33,14 @@ pub fn waveform_from_samples(
             out.push(0.0);
             continue;
         }
+        // unsigned_abs, not abs: i16::MIN has no positive counterpart, so
+        // `-32768i16.abs()` overflows.
         let peak = samples[start..end]
             .iter()
-            .map(|s| s.abs())
-            .fold(0.0_f32, f32::max);
-        out.push(peak);
+            .map(|s| s.unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        out.push(peak as f32 / 32768.0);
     }
     Ok(out)
 }

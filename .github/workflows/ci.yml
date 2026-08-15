@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tauri.conf.json reads its version straight from package.json, but
+      # Cargo.toml keeps its own copy — it's what diagnostic_info reports in
+      # bug reports, so a stale one sends people chasing the wrong build.
+      - name: Version consistency
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          crate=$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)
+          if [ "$pkg" != "$crate" ]; then
+            echo "::error::package.json says $pkg, src-tauri/Cargo.toml says $crate"
+            exit 1
+          fi
+          echo "both at $pkg"
+
+      - name: Typecheck
+        run: pnpm run check
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm run build
+
+  rust:
+    runs-on: ubuntu-latest
+    # The sidecars are ~200MB of ffmpeg that none of the unit tests invoke, so
+    # stub them instead of downloading. See src-tauri/build.rs.
+    env:
+      AUTOCUT_STUB_SIDECARS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # tauri-build needs these even for a `cargo check` on Linux.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Unit tests
+        working-directory: src-tauri
+        run: cargo test --lib

@@ -82,14 +82,50 @@ That's it.
 
 ## Tips
 
-- Got a long video? Turn on *preview range only* in the parameters panel
-  so detection runs on a short slice while you tune the sliders. The full
-  video gets processed when you hit export.
+- The first *detect* on a long video takes a moment — that's the speech
+  model reading the whole track. Every re-detect after it is instant,
+  because the sliders only reshape results autocut already has. Tune
+  freely.
 - DaVinci Resolve users: the FCPXML keeps your source timecode, so the
   clip auto-links to the original media file without a "media offline"
   dialog.
 - Scroll on the timeline pans it left/right. Drag the small window in the
   navigator below to zoom into a specific section.
+
+## Development
+
+Svelte 5 + TypeScript front end, Rust + Tauri 2 back end, ffmpeg and
+ffprobe bundled as sidecars.
+
+```sh
+pnpm install
+pnpm tauri:dev        # run the app
+```
+
+The first Rust build downloads ~200MB of ffmpeg binaries into
+`src-tauri/binaries/` (see `src-tauri/build.rs`).
+
+**Tests.** The front end's cut algebra and the Rust core both have unit
+tests, and CI runs them on every pull request.
+
+```sh
+pnpm test                                    # vitest
+pnpm run check                               # svelte-check
+
+cd src-tauri
+AUTOCUT_STUB_SIDECARS=1 cargo test --lib     # no download, no frontend build
+cargo clippy --all-targets
+cargo fmt --check
+```
+
+`AUTOCUT_STUB_SIDECARS=1` drops empty placeholders where the ffmpeg
+binaries go, so a fresh checkout can run the unit tests without fetching
+200MB first. Nothing in the unit tests shells out to ffmpeg. Never set it
+for a real build — the resulting bundle cannot process video, and it says
+so loudly at compile time.
+
+Version lives in `package.json`; `tauri.conf.json` reads it from there and
+CI checks that `src-tauri/Cargo.toml` agrees.
 
 ## Built by
 

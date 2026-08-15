@@ -32,7 +32,6 @@ export type DetectParams = {
   min_silence_ms: number;
   min_speech_ms: number;
   pad: number;
-  preview_range: [number, number] | null;
 };
 
 export type ExportQuality = "high" | "medium" | "small";

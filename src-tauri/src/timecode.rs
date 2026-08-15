@@ -27,9 +27,9 @@ impl TimecodeRate {
 }
 
 const NTSC_RATES: &[(u32, u64, u64)] = &[
-    (24, 1001, 24000),  // 23.976
-    (30, 1001, 30000),  // 29.97
-    (60, 1001, 60000),  // 59.94
+    (24, 1001, 24000), // 23.976
+    (30, 1001, 30000), // 29.97
+    (60, 1001, 60000), // 59.94
 ];
 
 /// Stand-in when the caller hands us something that isn't a frame rate.
@@ -135,8 +135,10 @@ pub fn parse_smpte(tc: Option<&str>, fps: f64) -> f64 {
     if nominal == 0 {
         return 0.0;
     }
-    let display_frames =
-        (h as u64) * 3600 * nominal as u64 + (m as u64) * 60 * nominal as u64 + (s as u64) * nominal as u64 + f as u64;
+    let display_frames = (h as u64) * 3600 * nominal as u64
+        + (m as u64) * 60 * nominal as u64
+        + (s as u64) * nominal as u64
+        + f as u64;
     let continuous = if rate.is_drop_frame && (nominal == 30 || nominal == 60) {
         let drops_per_min: u64 = if nominal == 30 { 2 } else { 4 };
         let total_minutes = (h as u64) * 60 + m as u64;

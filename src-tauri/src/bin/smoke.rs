@@ -27,8 +27,12 @@ fn main() -> Result<()> {
         info.width, info.height, info.fps, info.duration, info.start_timecode
     );
 
-    let samples = extract_pcm(&ffmpeg, &video, None)?;
-    println!("audio: {} samples @16kHz ({:.3}s)", samples.len(), samples.len() as f64 / 16_000.0);
+    let samples = extract_pcm(&ffmpeg, &video)?;
+    println!(
+        "audio: {} samples @16kHz ({:.3}s)",
+        samples.len(),
+        samples.len() as f64 / 16_000.0
+    );
 
     let segs = detect(&samples, VadParams::default(), 0.0)?;
     println!("vad: {} speech segments", segs.len());

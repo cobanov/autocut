@@ -6,9 +6,18 @@
 //!   - Linux x86_64 / aarch64: BtbN/FFmpeg-Builds GitHub release
 //!   - Windows x86_64:         BtbN/FFmpeg-Builds GitHub release
 //!
-//! Set `AUTOCUT_SKIP_FFMPEG_DOWNLOAD=1` to skip the download step (CI, offline,
-//! IDE-driven `cargo check`). The Tauri build will still try to bundle the
-//! binaries if they exist; missing binaries fail the bundle phase, not check.
+//! Set `AUTOCUT_SKIP_FFMPEG_DOWNLOAD=1` to skip the download step (offline,
+//! IDE-driven `cargo check`). Missing binaries then fail the bundle phase,
+//! loudly, which is the point — a release build must not silently ship
+//! without them.
+//!
+//! Set `AUTOCUT_STUB_SIDECARS=1` to skip the download *and* drop empty
+//! placeholder files where the sidecars would go. That is the only way to run
+//! `cargo test` on a fresh checkout without a ~200MB download first, because
+//! `tauri_build` refuses to proceed when a declared `externalBin` is absent.
+//! It is deliberately a separate variable from the one above: anything built
+//! with it produces a non-functional bundle, so it must never be something a
+//! release path could set by accident.
 //!
 //! Uses system `curl`, `tar`, `unzip` so the build itself has zero Rust HTTP
 //! dependencies.
@@ -35,8 +44,17 @@ fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=AUTOCUT_SKIP_FFMPEG_DOWNLOAD");
+    println!("cargo:rerun-if-env-changed=AUTOCUT_STUB_SIDECARS");
 
-    if env::var_os("AUTOCUT_SKIP_FFMPEG_DOWNLOAD").is_some() {
+    if env::var_os("AUTOCUT_STUB_SIDECARS").is_some() {
+        println!(
+            "cargo:warning=autocut: AUTOCUT_STUB_SIDECARS is set. \
+             ffmpeg and ffprobe are empty placeholders; this build cannot process video."
+        );
+        if let Err(e) = stub_ffmpeg() {
+            println!("cargo:warning=autocut: could not place sidecar stubs ({e})");
+        }
+    } else if env::var_os("AUTOCUT_SKIP_FFMPEG_DOWNLOAD").is_some() {
         eprintln!("autocut/build: AUTOCUT_SKIP_FFMPEG_DOWNLOAD set, skipping ffmpeg fetch");
     } else if let Err(e) = ensure_ffmpeg() {
         // Non-fatal: cargo check works without binaries; bundle phase will fail
@@ -47,12 +65,25 @@ fn main() {
     tauri_build::build();
 }
 
-fn ensure_ffmpeg() -> Result<(), String> {
+/// Place empty files where the sidecars belong, so `tauri_build`'s
+/// externalBin existence check passes without a download. Existing real
+/// binaries are left alone — running the test command on a machine that has
+/// already built the app must not clobber its working ffmpeg.
+fn stub_ffmpeg() -> Result<(), String> {
+    let (bin_dir, ffmpeg, ffprobe) = sidecar_paths()?;
+    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+    for path in [&ffmpeg, &ffprobe] {
+        if !path.exists() {
+            fs::write(path, b"").map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn sidecar_paths() -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let triple = host_target_triple()?;
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
     let bin_dir = manifest.join("binaries");
-    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
-
     let ext = if triple.contains("windows") {
         ".exe"
     } else {
@@ -60,8 +91,19 @@ fn ensure_ffmpeg() -> Result<(), String> {
     };
     let ffmpeg = bin_dir.join(format!("ffmpeg-{triple}{ext}"));
     let ffprobe = bin_dir.join(format!("ffprobe-{triple}{ext}"));
+    Ok((bin_dir, ffmpeg, ffprobe))
+}
 
-    if ffmpeg.exists() && ffprobe.exists() {
+fn ensure_ffmpeg() -> Result<(), String> {
+    let triple = host_target_triple()?;
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?);
+    let (bin_dir, ffmpeg, ffprobe) = sidecar_paths()?;
+    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    // A zero-length file here is a stub left by AUTOCUT_STUB_SIDECARS, not a
+    // real binary; a build that wants working ffmpeg should replace it.
+    let usable = |p: &Path| fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false);
+    if usable(&ffmpeg) && usable(&ffprobe) {
         return Ok(());
     }
 

@@ -54,7 +54,7 @@ pub struct AnalysisCache {
 
 struct CachedAnalysis {
     key: CacheKey,
-    samples: Arc<Vec<f32>>,
+    samples: Arc<Vec<i16>>,
     /// Populated on the first detection for this source. `None` until then —
     /// loading a video computes the waveform, which needs the PCM but not the
     /// scores, and scoring an hour of audio is seconds of work nobody has
@@ -89,16 +89,10 @@ impl AnalysisCache {
         &self,
         ffmpeg: &Path,
         video: &Path,
-        range: Option<(f64, f64)>,
         cancel: Arc<AtomicBool>,
-    ) -> Result<Arc<Vec<f32>>, String> {
+    ) -> Result<Arc<Vec<i16>>, String> {
         if cancel.load(Ordering::SeqCst) {
             return Err(CANCELLED.to_string());
-        }
-        if range.is_some() {
-            return extract_pcm_with_cancel(ffmpeg, video, range, Some(cancel))
-                .map(Arc::new)
-                .map_err(fmt_err);
         }
 
         let key = CacheKey::from_path(video)?;
@@ -119,7 +113,7 @@ impl AnalysisCache {
         // redundant ffmpeg over the same file. The wait is interruptible: the
         // holder polls its own cancel flag inside ffmpeg's read loop.
         let samples =
-            Arc::new(extract_pcm_with_cancel(ffmpeg, video, None, Some(cancel)).map_err(fmt_err)?);
+            Arc::new(extract_pcm_with_cancel(ffmpeg, video, Some(cancel)).map_err(fmt_err)?);
         *guard = Some(CachedAnalysis {
             key,
             samples: samples.clone(),
@@ -138,15 +132,9 @@ impl AnalysisCache {
         &self,
         ffmpeg: &Path,
         video: &Path,
-        range: Option<(f64, f64)>,
         cancel: Arc<AtomicBool>,
     ) -> Result<Arc<Vec<f32>>, String> {
-        let samples = self.samples(ffmpeg, video, range, cancel.clone())?;
-        if range.is_some() {
-            return score_chunks(&samples, Some(&cancel))
-                .map(Arc::new)
-                .map_err(fmt_err);
-        }
+        let samples = self.samples(ffmpeg, video, cancel.clone())?;
 
         let key = CacheKey::from_path(video)?;
         if let Some(entry) = lock(&self.inner).as_ref() {
@@ -202,7 +190,6 @@ pub struct DetectParams {
     pub min_silence_ms: u32,
     pub min_speech_ms: u32,
     pub pad: f64,
-    pub preview_range: Option<(f64, f64)>,
 }
 
 impl From<&DetectParams> for VadParams {
@@ -237,7 +224,7 @@ pub async fn compute_waveform(
     let cancel_for_worker = cancel.clone();
     let cache = state.analysis_cache.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let samples = cache.samples(&ffmpeg, &video, None, cancel_for_worker.clone())?;
+        let samples = cache.samples(&ffmpeg, &video, cancel_for_worker.clone())?;
         waveform_from_samples(
             samples.as_slice(),
             target_bins,
@@ -300,10 +287,8 @@ pub async fn detect_silence(
 ) -> Result<DetectResult, String> {
     let ffmpeg = ffmpeg_path(resource_dir(&app).as_deref()).map_err(fmt_err)?;
     let video = PathBuf::from(&path);
-    let range = params.preview_range;
     let pad = params.pad;
     let vad_params: VadParams = (&params).into();
-    let offset = range.map(|(s, _)| s).unwrap_or(0.0);
     let cancel = install_cancel_slot(&state.detect_cancel);
     let cancel_for_worker = cancel.clone();
     let cache = state.analysis_cache.clone();
@@ -312,8 +297,8 @@ pub async fn detect_silence(
         // Only the scoring step is expensive, and it's cached per source, so
         // every detect after the first is this cheap tail: re-segment the
         // probabilities under the new parameters and re-invert into a cutlist.
-        let scores = cache.scores(&ffmpeg, &video, range, cancel_for_worker.clone())?;
-        let segments = segments_from_scores(&scores, vad_params, offset);
+        let scores = cache.scores(&ffmpeg, &video, cancel_for_worker.clone())?;
+        let segments = segments_from_scores(&scores, vad_params, 0.0);
         let cutlist = CutList::from_speech_segments(&segments, duration, pad);
         Ok(DetectResult { cutlist })
     })

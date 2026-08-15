@@ -280,11 +280,7 @@ fn build_concat_list(source: &Path, cutlist: &CutList) -> String {
 fn concat_list_path() -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "autocut-concat-{}-{}.txt",
-        std::process::id(),
-        id
-    ))
+    std::env::temp_dir().join(format!("autocut-concat-{}-{}.txt", std::process::id(), id))
 }
 
 #[cfg(test)]
@@ -361,10 +357,7 @@ mod tests {
         };
         let list = build_concat_list(Path::new(r"C:\Users\me\my video.mp4"), &cl);
         // Backslashes are literal inside single quotes; nothing should escape them.
-        assert!(
-            list.contains(r"file 'C:\Users\me\my video.mp4'"),
-            "{list}"
-        );
+        assert!(list.contains(r"file 'C:\Users\me\my video.mp4'"), "{list}");
     }
 
     #[test]

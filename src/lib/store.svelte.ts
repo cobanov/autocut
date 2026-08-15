@@ -51,7 +51,6 @@ const DEFAULTS: DetectParams = {
   min_silence_ms: 100,
   min_speech_ms: 150,
   pad: 0.3,
-  preview_range: null,
 };
 
 function isCancellationError(err: unknown): boolean {
@@ -253,12 +252,7 @@ class EditorStore {
     this.jobStatus = "detecting";
     this.detectError = null;
     try {
-      const params: DetectParams = { ...this.params, preview_range: null };
-      const res = await detectSilence(
-        path,
-        duration,
-        params,
-      );
+      const res = await detectSilence(path, duration, { ...this.params });
       if (!this.isCurrentVideo(sessionId, path)) return false;
       this.cutlist = res.cutlist;
       return true;

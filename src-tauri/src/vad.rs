@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{anyhow, Context, Result};
 use voice_activity_detector::VoiceActivityDetector;
 
-use crate::audio::VAD_SAMPLE_RATE;
+use crate::audio::{to_unit, VAD_SAMPLE_RATE};
 use crate::cutlist::SpeechSegment;
 
 const CHUNK_SIZE: usize = 512; // silero V5 fixed window for 16kHz
@@ -41,24 +41,11 @@ impl Default for VadParams {
     }
 }
 
-/// Detect speech segments with hysteresis (matches silero's reference
-/// implementation): speech *starts* when probability >= `threshold` but
-/// *continues* while probability >= `threshold - 0.15`. Without hysteresis,
-/// marginal-probability frames in the middle of an utterance flicker on/off
-/// and produce false silences. `time_offset` is added to every returned
-/// timestamp to keep results source-relative when called with a windowed
-/// audio slice.
-pub fn detect(samples: &[f32], params: VadParams, time_offset: f64) -> Result<Vec<SpeechSegment>> {
-    detect_with_cancel(samples, params, time_offset, None)
-}
-
-pub fn detect_with_cancel(
-    samples: &[f32],
-    params: VadParams,
-    time_offset: f64,
-    cancel: Option<&AtomicBool>,
-) -> Result<Vec<SpeechSegment>> {
-    let scores = score_chunks(samples, cancel)?;
+/// Score then segment in one shot. The app itself keeps the two halves apart
+/// so it can cache the scoring, so this is really the convenience entry point
+/// for the `smoke` binary and for anyone reading the module top-down.
+pub fn detect(samples: &[i16], params: VadParams, time_offset: f64) -> Result<Vec<SpeechSegment>> {
+    let scores = score_chunks(samples, None)?;
     Ok(segments_from_scores(&scores, params, time_offset))
 }
 
@@ -71,7 +58,7 @@ pub fn detect_with_cancel(
 /// applied afterwards by `segments_from_scores`, and pad is applied later
 /// still by CutList. So a caller can score once per file and re-segment for
 /// free every time the user moves a slider.
-pub fn score_chunks(samples: &[f32], cancel: Option<&AtomicBool>) -> Result<Vec<f32>> {
+pub fn score_chunks(samples: &[i16], cancel: Option<&AtomicBool>) -> Result<Vec<f32>> {
     let mut vad = VoiceActivityDetector::builder()
         .sample_rate(VAD_SAMPLE_RATE as i64)
         .chunk_size(CHUNK_SIZE)
@@ -83,7 +70,9 @@ pub fn score_chunks(samples: &[f32], cancel: Option<&AtomicBool>) -> Result<Vec<
         if i % 64 == 0 && is_cancelled(cancel) {
             return Err(anyhow!("detection cancelled"));
         }
-        scores.push(vad.predict(chunk.iter().copied()));
+        // Converted a chunk at a time, straight into the model's iterator, so
+        // no float copy of the track ever exists.
+        scores.push(vad.predict(chunk.iter().copied().map(to_unit)));
     }
     Ok(scores)
 }

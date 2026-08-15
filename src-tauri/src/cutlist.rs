@@ -44,12 +44,7 @@ impl CutList {
     ) -> Self {
         let mut keeps: Vec<(f64, f64)> = segments
             .iter()
-            .map(|s| {
-                (
-                    (s.start - pad).max(0.0),
-                    (s.end + pad).min(source_duration),
-                )
-            })
+            .map(|s| ((s.start - pad).max(0.0), (s.end + pad).min(source_duration)))
             .filter(|(s, e)| e > s)
             .collect();
         keeps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -122,7 +117,10 @@ mod tests {
 
     #[test]
     fn single_speech_segment_padded_and_clamped() {
-        let segs = [SpeechSegment { start: 1.0, end: 2.0 }];
+        let segs = [SpeechSegment {
+            start: 1.0,
+            end: 2.0,
+        }];
         let cl = CutList::from_speech_segments(&segs, 5.0, 0.3);
         let kept: Vec<_> = cl.kept_intervals().collect();
         assert_eq!(kept.len(), 1);
@@ -134,8 +132,14 @@ mod tests {
     #[test]
     fn overlapping_pads_merge() {
         let segs = [
-            SpeechSegment { start: 1.0, end: 2.0 },
-            SpeechSegment { start: 2.4, end: 3.0 },
+            SpeechSegment {
+                start: 1.0,
+                end: 2.0,
+            },
+            SpeechSegment {
+                start: 2.4,
+                end: 3.0,
+            },
         ];
         let cl = CutList::from_speech_segments(&segs, 5.0, 0.3);
         let kept: Vec<_> = cl.kept_intervals().collect();
@@ -183,7 +187,10 @@ mod tests {
 
     #[test]
     fn pad_clamps_at_zero_and_duration() {
-        let segs = [SpeechSegment { start: 0.1, end: 4.9 }];
+        let segs = [SpeechSegment {
+            start: 0.1,
+            end: 4.9,
+        }];
         let cl = CutList::from_speech_segments(&segs, 5.0, 0.3);
         let kept: Vec<_> = cl.kept_intervals().collect();
         assert_eq!(kept[0].start, 0.0);

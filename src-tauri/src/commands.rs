@@ -19,7 +19,8 @@ use crate::cutlist::CutList;
 use crate::export_fcpxml::{render as render_fcpxml, FcpxmlParams};
 use crate::export_mp4;
 use crate::probe::{probe, VideoInfo};
-use crate::vad::{detect_with_cancel as detect_vad_with_cancel, VadParams};
+use crate::sync::lock;
+use crate::vad::{score_chunks, segments_from_scores, VadParams};
 use crate::waveform::waveform_from_samples;
 
 /// Render an anyhow::Error including the full chain of `with_context`
@@ -37,27 +38,38 @@ pub struct AppState {
     pub export_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub detect_cancel: Mutex<Option<Arc<AtomicBool>>>,
     pub waveform_cancel: Mutex<Option<Arc<AtomicBool>>>,
-    pub pcm_cache: Arc<PcmCache>,
+    pub analysis_cache: Arc<AnalysisCache>,
 }
 
+/// Everything derived from one source file's audio that survives across
+/// commands: the decoded PCM, and silero's per-chunk speech probabilities.
+///
+/// Both are keyed on the file's identity so switching sources invalidates
+/// them, and both are `Arc` so a reader can drop the lock before doing any
+/// real work with them.
 #[derive(Default)]
-pub struct PcmCache {
-    inner: Mutex<Option<CachedPcm>>,
+pub struct AnalysisCache {
+    inner: Mutex<Option<CachedAnalysis>>,
 }
 
-struct CachedPcm {
-    key: PcmCacheKey,
+struct CachedAnalysis {
+    key: CacheKey,
     samples: Arc<Vec<f32>>,
+    /// Populated on the first detection for this source. `None` until then —
+    /// loading a video computes the waveform, which needs the PCM but not the
+    /// scores, and scoring an hour of audio is seconds of work nobody has
+    /// asked for yet.
+    scores: Option<Arc<Vec<f32>>>,
 }
 
 #[derive(Clone, Eq, PartialEq)]
-struct PcmCacheKey {
+struct CacheKey {
     path: PathBuf,
     modified: Option<SystemTime>,
     len: u64,
 }
 
-impl PcmCacheKey {
+impl CacheKey {
     fn from_path(path: &Path) -> Result<Self, String> {
         let meta = std::fs::metadata(path).map_err(fmt_err)?;
         Ok(Self {
@@ -68,8 +80,12 @@ impl PcmCacheKey {
     }
 }
 
-impl PcmCache {
-    fn get_or_extract(
+const CANCELLED: &str = "audio extraction cancelled";
+
+impl AnalysisCache {
+    /// Decoded 16kHz mono PCM for the whole file, or a fresh uncached decode
+    /// when a sub-range was asked for.
+    fn samples(
         &self,
         ffmpeg: &Path,
         video: &Path,
@@ -77,7 +93,7 @@ impl PcmCache {
         cancel: Arc<AtomicBool>,
     ) -> Result<Arc<Vec<f32>>, String> {
         if cancel.load(Ordering::SeqCst) {
-            return Err("audio extraction cancelled".to_string());
+            return Err(CANCELLED.to_string());
         }
         if range.is_some() {
             return extract_pcm_with_cancel(ffmpeg, video, range, Some(cancel))
@@ -85,10 +101,10 @@ impl PcmCache {
                 .map_err(fmt_err);
         }
 
-        let key = PcmCacheKey::from_path(video)?;
-        let mut guard = self.inner.lock().unwrap();
+        let key = CacheKey::from_path(video)?;
+        let mut guard = lock(&self.inner);
         if cancel.load(Ordering::SeqCst) {
-            return Err("audio extraction cancelled".to_string());
+            return Err(CANCELLED.to_string());
         }
         if let Some(entry) = guard.as_ref() {
             if entry.key == key {
@@ -96,19 +112,67 @@ impl PcmCache {
             }
         }
 
+        // Decoding with the lock held is deliberate. Loading a video kicks off
+        // the waveform immediately and the user can hit detect a moment later;
+        // both want the same PCM. Serialising here makes the second caller
+        // wait for and then reuse the first one's decode rather than running a
+        // redundant ffmpeg over the same file. The wait is interruptible: the
+        // holder polls its own cancel flag inside ffmpeg's read loop.
         let samples =
             Arc::new(extract_pcm_with_cancel(ffmpeg, video, None, Some(cancel)).map_err(fmt_err)?);
-        *guard = Some(CachedPcm {
+        *guard = Some(CachedAnalysis {
             key,
             samples: samples.clone(),
+            scores: None,
         });
         Ok(samples)
+    }
+
+    /// Silero's speech probability per 512-sample chunk.
+    ///
+    /// This is what makes moving a detection slider cheap: the probabilities
+    /// depend only on the audio, so a re-detect after a parameter change is a
+    /// cache hit plus a pass of pure arithmetic instead of ~112k model
+    /// invocations for an hour of footage.
+    fn scores(
+        &self,
+        ffmpeg: &Path,
+        video: &Path,
+        range: Option<(f64, f64)>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Arc<Vec<f32>>, String> {
+        let samples = self.samples(ffmpeg, video, range, cancel.clone())?;
+        if range.is_some() {
+            return score_chunks(&samples, Some(&cancel))
+                .map(Arc::new)
+                .map_err(fmt_err);
+        }
+
+        let key = CacheKey::from_path(video)?;
+        if let Some(entry) = lock(&self.inner).as_ref() {
+            if entry.key == key {
+                if let Some(scores) = &entry.scores {
+                    return Ok(scores.clone());
+                }
+            }
+        }
+
+        // Scored without the lock. Unlike the decode above there is nothing to
+        // share — only one detection job runs at a time — so holding it would
+        // just block the waveform for the length of a model pass.
+        let scores = Arc::new(score_chunks(&samples, Some(&cancel)).map_err(fmt_err)?);
+        if let Some(entry) = lock(&self.inner).as_mut() {
+            if entry.key == key {
+                entry.scores = Some(scores.clone());
+            }
+        }
+        Ok(scores)
     }
 }
 
 fn install_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut guard = slot.lock().unwrap();
+    let mut guard = lock(slot);
     if let Some(previous) = guard.replace(cancel.clone()) {
         previous.store(true, Ordering::SeqCst);
     }
@@ -116,7 +180,7 @@ fn install_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) -> Arc<AtomicBool>
 }
 
 fn clear_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>, cancel: &Arc<AtomicBool>) {
-    let mut guard = slot.lock().unwrap();
+    let mut guard = lock(slot);
     if guard
         .as_ref()
         .map(|current| Arc::ptr_eq(current, cancel))
@@ -127,7 +191,7 @@ fn clear_cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>, cancel: &Arc<AtomicB
 }
 
 fn cancel_slot(slot: &Mutex<Option<Arc<AtomicBool>>>) {
-    if let Some(flag) = slot.lock().unwrap().take() {
+    if let Some(flag) = lock(slot).take() {
         flag.store(true, Ordering::SeqCst);
     }
 }
@@ -171,9 +235,9 @@ pub async fn compute_waveform(
     let video = PathBuf::from(&path);
     let cancel = install_cancel_slot(&state.waveform_cancel);
     let cancel_for_worker = cancel.clone();
-    let pcm_cache = state.pcm_cache.clone();
+    let cache = state.analysis_cache.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        let samples = pcm_cache.get_or_extract(&ffmpeg, &video, None, cancel_for_worker.clone())?;
+        let samples = cache.samples(&ffmpeg, &video, None, cancel_for_worker.clone())?;
         waveform_from_samples(
             samples.as_slice(),
             target_bins,
@@ -242,25 +306,20 @@ pub async fn detect_silence(
     let offset = range.map(|(s, _)| s).unwrap_or(0.0);
     let cancel = install_cancel_slot(&state.detect_cancel);
     let cancel_for_worker = cancel.clone();
-    let pcm_cache = state.pcm_cache.clone();
+    let cache = state.analysis_cache.clone();
 
     let joined = tauri::async_runtime::spawn_blocking(move || -> Result<DetectResult, String> {
-        let samples =
-            pcm_cache.get_or_extract(&ffmpeg, &video, range, cancel_for_worker.clone())?;
-        let segments = detect_vad_with_cancel(
-            samples.as_slice(),
-            vad_params,
-            offset,
-            Some(cancel_for_worker.as_ref()),
-        )
-        .map_err(fmt_err)?;
+        // Only the scoring step is expensive, and it's cached per source, so
+        // every detect after the first is this cheap tail: re-segment the
+        // probabilities under the new parameters and re-invert into a cutlist.
+        let scores = cache.scores(&ffmpeg, &video, range, cancel_for_worker.clone())?;
+        let segments = segments_from_scores(&scores, vad_params, offset);
         let cutlist = CutList::from_speech_segments(&segments, duration, pad);
         Ok(DetectResult { cutlist })
     })
     .await;
     clear_cancel_slot(&state.detect_cancel, &cancel);
-    let result = joined.map_err(fmt_err)?;
-    result
+    joined.map_err(fmt_err)?
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,8 +439,7 @@ pub async fn export_mp4(
     })
     .await;
     clear_cancel_slot(&state.export_cancel, &cancel);
-    let result = joined.map_err(fmt_err)?;
-    result
+    joined.map_err(fmt_err)?
 }
 
 #[tauri::command]
@@ -461,7 +519,8 @@ pub fn export_fcpxml(args: ExportFcpxmlArgs) -> Result<(), String> {
             title: &args.title,
             has_audio: args.has_audio,
         },
-    );
+    )
+    .map_err(fmt_err)?;
     std::fs::write(&args.output, xml).map_err(fmt_err)?;
     Ok(())
 }

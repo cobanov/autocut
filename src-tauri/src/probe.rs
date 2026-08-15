@@ -74,21 +74,10 @@ pub fn probe(ffprobe: &Path, video: &Path) -> Result<VideoInfo> {
         .get("height")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    let fps = parse_rational(
-        video_stream
-            .get("avg_frame_rate")
-            .and_then(|v| v.as_str())
-            .unwrap_or("0/1"),
-    )
-    .or_else(|| {
-        parse_rational(
-            video_stream
-                .get("r_frame_rate")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0/1"),
-        )
-    })
-    .unwrap_or(0.0);
+    let fps = resolve_fps(
+        video_stream.get("avg_frame_rate").and_then(|v| v.as_str()),
+        video_stream.get("r_frame_rate").and_then(|v| v.as_str()),
+    );
 
     let duration = json
         .get("format")
@@ -123,6 +112,25 @@ pub fn probe(ffprobe: &Path, video: &Path) -> Result<VideoInfo> {
     })
 }
 
+/// Assumed when the container declares no usable frame rate. Only FCPXML
+/// cares (MP4 export reads the real rate straight from the file), and the
+/// topbar shows the resolved value so a wrong guess is at least visible.
+const DEFAULT_FPS: f64 = 30.0;
+
+/// Pick the first frame rate that is actually a frame rate.
+///
+/// `avg_frame_rate` is preferred, but ffprobe reports it as `0/1` for streams
+/// it can't average — a well-formed rational that happens to be zero. Rejecting
+/// only parse failures accepts that and never falls through to `r_frame_rate`.
+fn resolve_fps(avg: Option<&str>, r: Option<&str>) -> f64 {
+    [avg, r]
+        .into_iter()
+        .flatten()
+        .filter_map(parse_rational)
+        .find(|fps| fps.is_finite() && *fps > 0.0)
+        .unwrap_or(DEFAULT_FPS)
+}
+
 fn parse_rational(s: &str) -> Option<f64> {
     let (n, d) = s.split_once('/')?;
     let n: f64 = n.parse().ok()?;
@@ -152,5 +160,34 @@ mod tests {
         assert!((parse_rational("30000/1001").unwrap() - 29.97).abs() < 0.01);
         assert_eq!(parse_rational("0/0"), None);
         assert_eq!(parse_rational("garbage"), None);
+    }
+
+    #[test]
+    fn resolve_fps_prefers_the_average_rate() {
+        assert_eq!(resolve_fps(Some("30/1"), Some("60/1")), 30.0);
+    }
+
+    #[test]
+    fn resolve_fps_falls_back_when_the_average_rate_is_zero() {
+        // ffprobe reports `0/1` (not `0/0`) for streams whose average it can't
+        // compute. That parses as a perfectly valid rational zero, so a chain
+        // that only rejects parse failures accepts it and never consults
+        // r_frame_rate.
+        assert_eq!(resolve_fps(Some("0/1"), Some("25/1")), 25.0);
+    }
+
+    #[test]
+    fn resolve_fps_falls_back_when_the_average_rate_is_undefined() {
+        assert_eq!(resolve_fps(Some("0/0"), Some("25/1")), 25.0);
+    }
+
+    #[test]
+    fn resolve_fps_falls_back_to_the_default_when_nothing_is_usable() {
+        assert_eq!(resolve_fps(Some("0/0"), Some("0/1")), DEFAULT_FPS);
+    }
+
+    #[test]
+    fn resolve_fps_falls_back_to_the_default_when_the_stream_declares_nothing() {
+        assert_eq!(resolve_fps(None, None), DEFAULT_FPS);
     }
 }

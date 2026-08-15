@@ -13,6 +13,8 @@
 
 use std::path::Path;
 
+use anyhow::Result;
+
 use crate::cutlist::CutList;
 use crate::timecode::{detect_rate, parse_smpte, seconds_to_rational};
 
@@ -24,7 +26,12 @@ pub struct FcpxmlParams<'a> {
     pub has_audio: bool,
 }
 
-pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
+pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> Result<String> {
+    // Structural, not a courtesy check: an FCPXML with an empty spine is
+    // well-formed XML that imports as an empty timeline, so there is no later
+    // point at which anything would notice.
+    cutlist.ensure_exportable()?;
+
     let drop_frame = params
         .start_timecode
         .map(|tc| tc.contains(';'))
@@ -67,7 +74,7 @@ pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
         r#" hasAudio="0""#
     };
 
-    format!(
+    Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fcpxml>
 <fcpxml version="1.11">
@@ -89,7 +96,7 @@ pub fn render(cutlist: &CutList, params: FcpxmlParams<'_>) -> String {
   </library>
 </fcpxml>
 "#
-    )
+    ))
 }
 
 fn to_file_uri(path: &Path) -> String {
@@ -170,7 +177,8 @@ mod tests {
                 title: "demo",
                 has_audio: true,
             },
-        );
+        )
+        .expect("this cutlist has keeps");
         // tcFormat for 29.97 drop-frame
         assert!(xml.contains("tcFormat=\"DF\""), "{xml}");
         // Two asset-clips for two kept intervals
@@ -196,7 +204,8 @@ mod tests {
                 title: "demo",
                 has_audio: true,
             },
-        );
+        )
+        .expect("this cutlist has keeps");
         assert!(xml.contains("tcFormat=\"NDF\""));
         assert!(xml.contains("frameDuration=\"1/25s\""));
     }
@@ -213,8 +222,32 @@ mod tests {
                 title: "a & b <c>",
                 has_audio: true,
             },
-        );
+        )
+        .expect("this cutlist has keeps");
         assert!(xml.contains("a &amp; b &lt;c&gt;"));
+    }
+
+    #[test]
+    fn refuses_to_render_a_timeline_with_nothing_kept() {
+        // The mp4 exporter has always rejected this. FCPXML used to write the
+        // file anyway, so the user got a valid-looking .fcpxml that opened as
+        // an empty timeline in Resolve with no indication anything went wrong.
+        let cutlist = cl(vec![(0.0, 3.0, CutKind::Remove)], 3.0);
+        let err = render(
+            &cutlist,
+            FcpxmlParams {
+                fps: 25.0,
+                asset_path: None,
+                start_timecode: None,
+                title: "empty",
+                has_audio: true,
+            },
+        )
+        .expect_err("an empty timeline is not a valid export");
+        assert!(
+            err.to_string().contains("nothing to keep"),
+            "unhelpful error: {err}"
+        );
     }
 
     #[test]
@@ -229,7 +262,8 @@ mod tests {
                 title: "silent",
                 has_audio: false,
             },
-        );
+        )
+        .expect("this cutlist has keeps");
         assert!(xml.contains("hasAudio=\"0\""), "{xml}");
         assert!(!xml.contains("audioSources="), "{xml}");
         assert!(!xml.contains("audioChannels="), "{xml}");

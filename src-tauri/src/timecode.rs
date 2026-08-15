@@ -32,7 +32,23 @@ const NTSC_RATES: &[(u32, u64, u64)] = &[
     (60, 1001, 60000),  // 59.94
 ];
 
+/// Stand-in when the caller hands us something that isn't a frame rate.
+/// Matches probe.rs's DEFAULT_FPS; both exist so neither module has to trust
+/// the other to have sanitised the value first.
+const FALLBACK_FPS: f64 = 30.0;
+
 pub fn detect_rate(fps: f64, drop_frame: bool) -> TimecodeRate {
+    // Zero, negative, NaN and infinity all have to be turned away here. The
+    // rational fallback at the bottom of this function computes
+    // `(120000.0 / fps).round() as u64`, and Rust saturates out-of-range float
+    // casts, so fps = 0 yields a frame_duration numerator of u64::MAX — one
+    // "frame" lasting about 4.8 million years. Everything downstream then
+    // rounds to zero frames and the FCPXML exports an empty timeline.
+    let fps = if fps.is_finite() && fps > 0.0 {
+        fps
+    } else {
+        FALLBACK_FPS
+    };
     let nominal = fps.round() as i64;
     if nominal > 0 {
         if let Some(&(n, num, den)) = NTSC_RATES.iter().find(|(n, _, _)| *n as i64 == nominal) {
@@ -198,5 +214,40 @@ mod tests {
     fn seconds_to_rational_zero() {
         let r = detect_rate(30.0, false);
         assert_eq!(seconds_to_rational(0.0, &r), "0s");
+    }
+
+    #[test]
+    fn detect_rate_refuses_to_build_a_degenerate_rate() {
+        // A non-positive fps used to reach the 120000-denominator fallback and
+        // compute `(120000.0 / 0.0).round() as u64`, which saturates to
+        // u64::MAX. That makes one "frame" ~1.5e9 seconds long.
+        for fps in [0.0, -12.0, f64::NAN, f64::INFINITY] {
+            let r = detect_rate(fps, false);
+            assert!(
+                r.frame_seconds() > 0.0 && r.frame_seconds() <= 1.0,
+                "fps {fps} produced frame_seconds {}",
+                r.frame_seconds()
+            );
+            assert!(r.nominal_fps > 0, "fps {fps} produced nominal 0");
+        }
+    }
+
+    #[test]
+    fn seconds_to_rational_still_measures_time_at_a_degenerate_fps() {
+        // Downstream of the bug above, one second rounded to zero frames and
+        // every asset-clip in the exported FCPXML carried a zero duration, so
+        // the NLE imported an empty timeline. Assert on the numerator rather
+        // than the string: the degenerate path renders "0/120000s", which is
+        // just as empty as "0s" but not equal to it.
+        let r = detect_rate(0.0, false);
+        let rendered = seconds_to_rational(1.0, &r);
+        let numerator: u64 = rendered
+            .trim_end_matches('s')
+            .split('/')
+            .next()
+            .expect("rational always has a numerator")
+            .parse()
+            .expect("numerator is an integer");
+        assert!(numerator > 0, "one second rendered as {rendered}");
     }
 }

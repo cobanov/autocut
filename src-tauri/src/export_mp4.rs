@@ -24,6 +24,7 @@ use std::thread;
 use anyhow::{anyhow, Context, Result};
 
 use crate::cutlist::CutList;
+use crate::sync::lock;
 
 pub struct ExportProgress {
     pub pct: f32,
@@ -104,10 +105,8 @@ pub fn export(
     cancel: Arc<AtomicBool>,
     on_progress: impl FnMut(ExportProgress) + Send + 'static,
 ) -> Result<()> {
+    cutlist.ensure_exportable()?;
     let kept_total: f64 = cutlist.total_kept_duration();
-    if kept_total <= 0.0 {
-        return Err(anyhow!("nothing to keep; cutlist has zero kept duration"));
-    }
 
     let list_path = concat_list_path();
     std::fs::write(&list_path, build_concat_list(source, cutlist))
@@ -152,7 +151,6 @@ pub fn export(
         .take()
         .ok_or_else(|| anyhow!("ffmpeg stderr unavailable"))?;
 
-    let on_progress = Mutex::new(on_progress);
     // Keep a rolling buffer of the last few non-progress stderr lines so we
     // can surface ffmpeg's actual error message when the encode fails.
     // Anything matching `key=value` is a progress field; the real diagnostics
@@ -161,6 +159,10 @@ pub fn export(
     let stderr_tail_writer = stderr_tail.clone();
     let cancel_thread = cancel.clone();
     let reader = thread::spawn(move || -> Result<()> {
+        // The callback is owned outright by this thread, so it needs no
+        // synchronisation — it used to sit behind a Mutex that nothing else
+        // could ever contend for.
+        let mut on_progress = on_progress;
         let buf = BufReader::new(stderr);
         for line in buf.lines() {
             let line = line.context("reading ffmpeg stderr")?;
@@ -172,18 +174,17 @@ pub fn export(
                     let seconds = us.max(0) as f64 / 1_000_000.0;
                     let pct = ((seconds / kept_total) * 100.0).clamp(0.0, 99.0);
                     let msg = format!("encoded {:.2}s of {:.2}s kept", seconds, kept_total);
-                    let mut cb = on_progress.lock().unwrap();
-                    cb(ExportProgress {
+                    on_progress(ExportProgress {
                         pct: pct as f32,
                         message: msg,
                     });
                 }
                 continue;
             }
-            // Only keep the last 20 prose lines — enough to identify the
+            // Only keep the last 20 diagnostic lines — enough to identify the
             // failure without dumping every progress key.
-            if !line.contains('=') && !line.trim().is_empty() {
-                let mut tail = stderr_tail_writer.lock().unwrap();
+            if !is_progress_line(&line) && !line.trim().is_empty() {
+                let mut tail = lock(&stderr_tail_writer);
                 tail.push(line);
                 if tail.len() > 20 {
                     let drop = tail.len() - 20;
@@ -206,7 +207,7 @@ pub fn export(
             Ok(Some(status)) => {
                 let _ = reader.join();
                 if !status.success() {
-                    let tail = stderr_tail.lock().unwrap();
+                    let tail = lock(&stderr_tail);
                     let detail = if tail.is_empty() {
                         String::new()
                     } else {
@@ -225,8 +226,33 @@ pub fn export(
     // the user (or a bug report) can inspect what we asked ffmpeg to do.
     if outcome.is_ok() {
         let _ = std::fs::remove_file(&list_path);
+    } else {
+        // Killing ffmpeg mid-encode leaves a truncated, unplayable mp4 at the
+        // path the user chose — and if they were overwriting an earlier
+        // export, that file is now gone and replaced with the stub. Remove it
+        // so a cancelled or failed export leaves nothing behind pretending to
+        // be a result.
+        let _ = std::fs::remove_file(output);
     }
     outcome
+}
+
+/// Is this stderr line one of ffmpeg's `-progress` fields rather than a
+/// diagnostic worth showing the user?
+///
+/// The progress stream is strictly `snake_case_key=value`. Testing for a bare
+/// '=' anywhere in the line also swallowed real errors — ffmpeg says things
+/// like "maybe incorrect parameters such as bit_rate, rate, width or height"
+/// and quotes filter expressions containing '=' — which left failed exports
+/// reporting nothing but the exit status.
+fn is_progress_line(line: &str) -> bool {
+    let Some((key, _)) = line.split_once('=') else {
+        return false;
+    };
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Build a concat demuxer list (UTF-8, LF line endings) repeating the source
@@ -346,5 +372,38 @@ mod tests {
         let a = concat_list_path();
         let b = concat_list_path();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn progress_fields_are_recognised() {
+        for line in [
+            "out_time_us=1234567",
+            "frame=42",
+            "bitrate=N/A",
+            "speed=1.02x",
+            "progress=continue",
+        ] {
+            assert!(is_progress_line(line), "{line} should be a progress field");
+        }
+    }
+
+    #[test]
+    fn diagnostics_containing_an_equals_sign_are_not_mistaken_for_progress() {
+        // The tail buffer exists to surface ffmpeg's actual complaint when an
+        // encode fails. Treating every line with an '=' in it as a progress
+        // field threw away exactly the lines worth keeping, leaving the user
+        // with a bare "ffmpeg exited with exit status: 1".
+        for line in [
+            "[libx264 @ 0x7f8] width not divisible by 2 (1921x1080)",
+            "Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height",
+            "[Parsed_scale_0 @ 0x600] Error when evaluating the expression 'a=b'",
+            "Conversion failed!",
+            "",
+        ] {
+            assert!(
+                !is_progress_line(line),
+                "{line} should be kept as a diagnostic"
+            );
+        }
     }
 }

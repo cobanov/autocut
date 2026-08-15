@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,6 +103,17 @@ impl CutList {
     pub fn total_kept_duration(&self) -> f64 {
         self.kept_intervals().map(Cut::duration).sum()
     }
+
+    /// Reject a cutlist that would produce an empty result. Both exporters
+    /// gate on this: mp4 has always refused, and FCPXML used to happily write
+    /// a well-formed file whose timeline contained nothing.
+    pub fn ensure_exportable(&self) -> Result<()> {
+        if self.total_kept_duration() > 0.0 {
+            Ok(())
+        } else {
+            Err(anyhow!("nothing to keep; cutlist has zero kept duration"))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +150,35 @@ mod tests {
         assert_eq!(cl.intervals.len(), 1);
         assert_eq!(cl.intervals[0].kind, CutKind::Remove);
         assert_eq!(cl.total_kept_duration(), 0.0);
+    }
+
+    #[test]
+    fn a_cutlist_with_nothing_kept_is_not_exportable() {
+        let cl = CutList::from_speech_segments(&[], 4.0, 0.3);
+        assert!(cl.ensure_exportable().is_err());
+    }
+
+    #[test]
+    fn a_cutlist_whose_keeps_are_all_degenerate_is_not_exportable() {
+        let cl = CutList {
+            source_duration: 4.0,
+            intervals: vec![Cut {
+                start: 2.0,
+                end: 2.0,
+                kind: CutKind::Keep,
+            }],
+        };
+        assert!(cl.ensure_exportable().is_err());
+    }
+
+    #[test]
+    fn a_cutlist_with_kept_footage_is_exportable() {
+        let segs = [SpeechSegment {
+            start: 1.0,
+            end: 2.0,
+        }];
+        let cl = CutList::from_speech_segments(&segs, 5.0, 0.3);
+        assert!(cl.ensure_exportable().is_ok());
     }
 
     #[test]

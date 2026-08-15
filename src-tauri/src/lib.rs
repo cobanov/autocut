@@ -5,6 +5,7 @@ pub mod cutlist;
 pub mod export_fcpxml;
 pub mod export_mp4;
 pub mod probe;
+pub mod sync;
 pub mod timecode;
 pub mod vad;
 pub mod waveform;

@@ -1,35 +1,16 @@
-//! Compute a downsampled amplitude envelope (waveform) from a video's audio
-//! track. Used to render the audio waveform in the timeline UI.
+//! Downsample a decoded audio track into the amplitude envelope the timeline
+//! draws.
 //!
-//! Strategy: extract 16kHz mono PCM (same path as VAD), then bin into
-//! `target_bins` equal-width slices, taking the peak |sample| per bin.
-//! Result is a Vec<f32> in [0, 1] with `target_bins` entries.
+//! Bin the 16kHz mono PCM into `target_bins` equal-width slices and take the
+//! peak |sample| per bin. Result is a Vec<f32> in [0, 1].
+//!
+//! The samples come from the caller, not from ffmpeg directly: the VAD wants
+//! exactly the same decode, so `commands::AnalysisCache` owns the extraction
+//! and both consumers read from it.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-
-use crate::audio::{extract_pcm, extract_pcm_with_cancel};
-
-pub fn extract_waveform(ffmpeg: &Path, video: &Path, target_bins: usize) -> Result<Vec<f32>> {
-    extract_waveform_with_cancel(ffmpeg, video, target_bins, None)
-}
-
-pub fn extract_waveform_with_cancel(
-    ffmpeg: &Path,
-    video: &Path,
-    target_bins: usize,
-    cancel: Option<Arc<AtomicBool>>,
-) -> Result<Vec<f32>> {
-    let samples = if let Some(flag) = cancel.clone() {
-        extract_pcm_with_cancel(ffmpeg, video, None, Some(flag))?
-    } else {
-        extract_pcm(ffmpeg, video, None)?
-    };
-    waveform_from_samples(&samples, target_bins, cancel.as_deref())
-}
 
 pub fn waveform_from_samples(
     samples: &[f32],

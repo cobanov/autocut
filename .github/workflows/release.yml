@@ -110,12 +110,26 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # merge-multiple merges the artifact *names* into one directory but keeps
+      # each artifact's own internal layout. The Windows leg declares two path
+      # patterns, so its installers arrive as artifacts/msi/*.msi and
+      # artifacts/nsis/*.exe, while the single-pattern macOS dmg lands flat.
+      # A plain artifacts/* therefore hands `gh release upload` two directories
+      # and it fails with "is a directory". Flatten to files first.
+      - name: Flatten
+        run: |
+          set -euo pipefail
+          mkdir -p installers
+          find artifacts -type f \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+            -exec mv -t installers {} +
+          ls -la installers
+
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ls -la artifacts
 
           # Re-runs are the normal case, not the exception: one platform fails,
           # you fix it and move the tag, and by then the draft from the first
@@ -130,7 +144,7 @@ jobs:
               --title "$GITHUB_REF_NAME" \
               --generate-notes
           fi
-          gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          gh release upload "$GITHUB_REF_NAME" installers/* --clobber
 
       # The build matrix tolerates one platform failing so the other's artifacts
       # survive, which means a draft can end up holding only half a release. It
@@ -142,7 +156,7 @@ jobs:
           set -euo pipefail
           missing=""
           for pattern in "*.dmg" "*.msi" "*-setup.exe"; do
-            if ! compgen -G "artifacts/$pattern" > /dev/null; then
+            if ! compgen -G "installers/$pattern" > /dev/null; then
               missing="$missing $pattern"
             fi
           done

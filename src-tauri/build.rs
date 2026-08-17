@@ -27,13 +27,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// Pinned BtbN FFmpeg release. To rotate:
-//   1. Pick a new release at https://github.com/BtbN/FFmpeg-Builds/releases
-//   2. Update BTBN_RELEASE to its tag (e.g. autobuild-YYYY-MM-DD-HH-MM)
+// Pinned BtbN FFmpeg release.
+//
+// PIN A MONTH-END BUILD. BtbN keeps every daily autobuild for about two weeks
+// and then deletes it, retaining only the last build of each month — those go
+// back years. A mid-month tag therefore works when you paste it and 404s a
+// fortnight later, taking the Windows and Linux release builds down with it.
+// That is exactly how autobuild-2026-05-18-18-09 died: fine in May, gone by
+// August, and the failure surfaces as a bare `curl: (22) ... 404` followed by
+// "resource path binaries\ffmpeg-x86_64-pc-windows-msvc.exe doesn't exist".
+// macOS is unaffected — it pulls from evermeet.cx, not here.
+//
+// To rotate:
+//   1. Pick the newest *month-end* release (autobuild-YYYY-MM-{28,30,31}-HH-MM)
+//      at https://github.com/BtbN/FFmpeg-Builds/releases
+//   2. Update BTBN_RELEASE to its tag
 //   3. Update the filename + sha256 of every asset in btbn_asset() below
 //      Hashes are listed on the release page; verify locally with
 //      `shasum -a 256` (or `sha256sum`) before pasting.
-const BTBN_RELEASE: &str = "autobuild-2026-05-18-18-09";
+const BTBN_RELEASE: &str = "autobuild-2026-07-31-14-10";
 
 struct BtbnAsset {
     filename: &'static str,
@@ -176,7 +188,31 @@ fn command_output(cmd: &mut Command) -> Result<String, String> {
 }
 
 fn curl(url: &str, dst: &Path) -> Result<(), String> {
-    run(Command::new("curl").args(["-fsSL", "-o"]).arg(dst).arg(url))
+    let status = Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(dst)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("curl {url}: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    // curl exits 22 when -f meets an HTTP error. On a pinned BtbN asset that is
+    // almost never a network fault — it means the release was garbage collected.
+    // Worth naming here, because the next thing to fail is tauri's "resource
+    // path binaries\ffmpeg-...exe doesn't exist", which reports the symptom and
+    // gives no hint where to look. Checked on the code rather than the rendered
+    // status, which prints "exit status: 22" on unix and "exit code: 22" on
+    // Windows — and Windows is where this breaks.
+    if status.code() == Some(22) && url.contains("BtbN/FFmpeg-Builds") {
+        return Err(format!(
+            "{url} is gone (HTTP 4xx). BtbN keeps daily autobuilds for about two \
+             weeks and only month-end ones after that, so a mid-month pin expires \
+             on its own. Re-pin BTBN_RELEASE to the newest month-end tag and \
+             refresh the hashes in btbn_asset()."
+        ));
+    }
+    Err(format!("curl {url} failed with {status}"))
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
@@ -324,16 +360,16 @@ fn fetch_btbn(
 fn btbn_asset(arch_slug: &str, ext: &str) -> Result<BtbnAsset, String> {
     match (arch_slug, ext) {
         ("linux64", "tar.xz") => Ok(BtbnAsset {
-            filename: "ffmpeg-N-124532-gb4d11dffbf-linux64-gpl.tar.xz",
-            sha256: "b9121c11ceb5dc9456af3a7b3f9d5ead7b8d2465b9374f3ff202ae4f21d15504",
+            filename: "ffmpeg-N-125875-g5d4d3bdc61-linux64-gpl.tar.xz",
+            sha256: "16161335f2323ec74c5cec70427d3365ee9e0f581486eda35f6eba47375c45b4",
         }),
         ("linuxarm64", "tar.xz") => Ok(BtbnAsset {
-            filename: "ffmpeg-N-124532-gb4d11dffbf-linuxarm64-gpl.tar.xz",
-            sha256: "07b11bb203eb2358b014664fdbcfde4ea6561d0e2a312463101c1e4602e6f683",
+            filename: "ffmpeg-N-125875-g5d4d3bdc61-linuxarm64-gpl.tar.xz",
+            sha256: "a38f9976ff6377ed0a1117ed726c580da968cc8a0e9dc1328297cc60673e6f92",
         }),
         ("win64", "zip") => Ok(BtbnAsset {
-            filename: "ffmpeg-N-124532-gb4d11dffbf-win64-gpl.zip",
-            sha256: "63ec9a63cd9e82e10cac803ba6559c25d28fe38fb7743ba3621e20c71a484438",
+            filename: "ffmpeg-N-125875-g5d4d3bdc61-win64-gpl.zip",
+            sha256: "68a5e966533002785c3e4b9a98327e21d5277802668bf889d94086cb6426cbb4",
         }),
         _ => Err(format!("no pinned BtbN asset for {arch_slug}.{ext}")),
     }

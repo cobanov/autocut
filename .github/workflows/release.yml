@@ -116,10 +116,38 @@ jobs:
         run: |
           set -euo pipefail
           ls -la artifacts
-          # --generate-notes gives the draft a commit list to start from; the
-          # human-facing changelog gets written over it before publishing.
-          gh release create "$GITHUB_REF_NAME" \
-            --draft \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            artifacts/*
+
+          # Re-runs are the normal case, not the exception: one platform fails,
+          # you fix it and move the tag, and by then the draft from the first
+          # attempt already exists. Create it once, then upload over whatever is
+          # there. --generate-notes only seeds the body with a commit list; the
+          # human-facing changelog is written over it before publishing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists, refreshing its assets"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+
+      # The build matrix tolerates one platform failing so the other's artifacts
+      # survive, which means a draft can end up holding only half a release. It
+      # looks complete in the UI, and a macOS-only v0.5.0 is exactly the sort of
+      # thing that gets published by accident. Leave the draft in place — the
+      # assets are still worth having — but keep the run red.
+      - name: All platforms present
+        run: |
+          set -euo pipefail
+          missing=""
+          for pattern in "*.dmg" "*.msi" "*-setup.exe"; do
+            if ! compgen -G "artifacts/$pattern" > /dev/null; then
+              missing="$missing $pattern"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::draft $GITHUB_REF_NAME is incomplete, missing:$missing"
+            exit 1
+          fi
+          echo "all three installers present"

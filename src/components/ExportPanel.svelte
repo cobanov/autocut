@@ -86,6 +86,7 @@
           : "source      : (no video loaded)",
         `quality     : ${editor.exportOptions.quality}`,
         `resolution  : ${editor.exportOptions.resolution}`,
+        `loudnorm    : ${editor.exportOptions.normalizeAudio ? "-14 lufs" : "off"}`,
         "",
         "error",
         "-----",
@@ -242,6 +243,21 @@
           <pre class="error-body mono">{editor.trackError}</pre>
         </div>
       {/if}
+    </div>
+
+    <div class="opt">
+      <div class="opt-label">audio</div>
+      <label
+        class="toggle"
+        title="Normalize MP4 audio loudness to -14 LUFS (YouTube / podcast standard). Applies to MP4 export only."
+      >
+        <input
+          type="checkbox"
+          bind:checked={editor.exportOptions.normalizeAudio}
+          disabled={!editor.video?.has_audio}
+        />
+        <span>normalize to -14 lufs</span>
+      </label>
     </div>
 
     <div class="export-row">

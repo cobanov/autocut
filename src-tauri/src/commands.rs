@@ -395,6 +395,8 @@ pub struct ExportMp4Args {
     pub resolution: ExportResolution,
     #[serde(default = "default_has_audio")]
     pub has_audio: bool,
+    #[serde(default)]
+    pub normalize_audio: bool,
 }
 
 fn default_quality() -> ExportQuality {
@@ -453,6 +455,7 @@ pub async fn export_mp4(
         quality: args.quality.into(),
         resolution: args.resolution.into(),
         has_audio: args.has_audio,
+        normalize_audio: args.normalize_audio,
     };
     thread::spawn(move || {
         let on_progress = move |p: export_mp4::ExportProgress| {

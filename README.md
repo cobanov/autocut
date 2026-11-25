@@ -114,6 +114,17 @@ for a real build: the bundle cannot process video, and it says so at compile tim
 The version lives in `package.json`. `tauri.conf.json` reads it from there, and CI
 checks that `src-tauri/Cargo.toml` agrees.
 
+## Contributing
+
+Pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: one
+feature per PR, and anything that talks to an outside service stays optional.
+
+## License
+
+AutoCut is [MIT](LICENSE). The bundled ffmpeg and ffprobe binaries are separate
+programs under their own licenses (the builds AutoCut ships are GPL); see
+[ffmpeg.org/legal](https://ffmpeg.org/legal.html).
+
 ## Built by
 
 [mert cobanov](https://cobanov.dev) · 2026

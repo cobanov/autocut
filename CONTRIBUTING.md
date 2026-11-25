@@ -90,6 +90,11 @@ docs: explain the padding slider
 
 ## Reporting bugs
 
-Open an issue with your OS, the AutoCut version, what you did, what you
-expected and what happened. If a specific video triggers it, the output of
-`ffprobe <file>` helps a lot.
+Open an issue with the bug report template: your OS, the AutoCut version, what
+you did, what you expected and what happened. If a specific video triggers it,
+the output of `ffprobe <file>` helps a lot.
+
+## License
+
+AutoCut is MIT licensed. By opening a pull request you agree that your
+contribution is released under the same [license](LICENSE).

@@ -70,6 +70,7 @@ export type ExportResolution = "source" | "1080p" | "720p" | "480p";
 export type ExportOptions = {
   quality: ExportQuality;
   resolution: ExportResolution;
+  normalizeAudio: boolean;
 };
 
 export type ExportProgressEvent = {

@@ -72,6 +72,7 @@ export async function exportMp4(
       quality: options.quality,
       resolution: options.resolution,
       has_audio: hasAudio,
+      normalize_audio: options.normalizeAudio,
     },
   });
 }

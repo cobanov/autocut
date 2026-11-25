@@ -111,6 +111,7 @@ class EditorStore {
   exportOptions = $state<ExportOptions>({
     quality: "medium",
     resolution: "source",
+    normalizeAudio: false,
   });
   currentTime = $state(0);
   skipRemoved = $state(true);

@@ -84,6 +84,8 @@ pub struct ExportOptions {
     pub quality: Quality,
     pub resolution: Resolution,
     pub has_audio: bool,
+    /// Normalize output audio loudness to -14 LUFS (EBU R128 / YouTube standard).
+    pub normalize_audio: bool,
 }
 
 impl Default for ExportOptions {
@@ -92,7 +94,17 @@ impl Default for ExportOptions {
             quality: Quality::Medium,
             resolution: Resolution::Source,
             has_audio: true,
+            normalize_audio: false,
         }
+    }
+}
+
+/// ffmpeg audio filter expression for the current export options, if any.
+fn audio_filter(options: ExportOptions) -> Option<&'static str> {
+    if options.has_audio && options.normalize_audio {
+        Some("loudnorm=I=-14:TP=-1.5:LRA=11")
+    } else {
+        None
     }
 }
 
@@ -138,6 +150,9 @@ pub fn export(
         cmd.args(["-vf", &format!("scale=-2:{h}")]);
     }
     if options.has_audio {
+        if let Some(af) = audio_filter(options) {
+            cmd.args(["-af", af]);
+        }
         cmd.args(["-c:a", "aac", "-b:a", options.quality.audio_bitrate()]);
     } else {
         cmd.arg("-an");
@@ -398,5 +413,30 @@ mod tests {
                 "{line} should be kept as a diagnostic"
             );
         }
+    }
+
+    #[test]
+    fn audio_filter_is_off_by_default() {
+        assert_eq!(audio_filter(ExportOptions::default()), None);
+    }
+
+    #[test]
+    fn audio_filter_emits_loudnorm_when_enabled_with_audio() {
+        let opts = ExportOptions {
+            normalize_audio: true,
+            has_audio: true,
+            ..ExportOptions::default()
+        };
+        assert_eq!(audio_filter(opts), Some("loudnorm=I=-14:TP=-1.5:LRA=11"));
+    }
+
+    #[test]
+    fn audio_filter_is_omitted_for_silent_sources() {
+        let opts = ExportOptions {
+            normalize_audio: true,
+            has_audio: false,
+            ..ExportOptions::default()
+        };
+        assert_eq!(audio_filter(opts), None);
     }
 }

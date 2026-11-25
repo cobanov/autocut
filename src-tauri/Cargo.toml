@@ -3,6 +3,7 @@ name = "autocut"
 version = "0.5.0"
 description = "Drop a video, remove silences, export MP4 or FCPXML"
 authors = ["Mert Cobanov"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.77"
 default-run = "autocut"
